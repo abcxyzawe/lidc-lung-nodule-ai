@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Kết quả - {{meta.name}}</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+
+  <a href="/" class="back">← Trang chủ</a>
+  <h1>{{meta.name}}</h1>
+  <p class="subtitle">Phân tích lúc {{meta.timestamp}}</p>
+
+  <div class="stats">
+    <div class="stat"><span class="big">{{meta.n_slices}}</span><span class="lbl">slices CT</span></div>
+    <div class="stat"><span class="big">{{meta.n_nodules}}</span><span class="lbl">nodule phát hiện</span></div>
+    <div class="stat"><span class="big">{{meta.lung_voxels|int}}</span><span class="lbl">voxel phổi</span></div>
+    <div class="stat"><span class="big">{{ "%.1f"|format(meta.timing_sec.ai_predict) }}s</span><span class="lbl">AI inference</span></div>
+  </div>
+
+  <div class="card plot-wrap">
+    <h2>3D Lung + Nodules (kéo chuột để xoay, scroll để zoom)</h2>
+    {{ plot_html | safe }}
+    <p class="hint">Vỏ phổi xanh trong suốt làm context. Nodule màu đặc — click legend để bật/tắt từng cái.</p>
+  </div>
+
+  {% if meta.nodules %}
+  <div class="card">
+    <h2>Danh sách nodule chi tiết</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Voxels</th><th>Volume (mm³)</th>
+          <th>Đường kính (mm)</th><th>Vị trí (z, y, x)</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for n in meta.nodules %}
+        <tr>
+          <td>{{ n.id }}</td>
+          <td>{{ n.voxels }}</td>
+          <td>{{ "%.0f"|format(n.volume_mm3) }}</td>
+          <td>{{ "%.1f"|format(n.diameter_mm) }}</td>
+          <td>{{ "%.0f, %.0f, %.0f"|format(n.centroid_zyx_voxel[0], n.centroid_zyx_voxel[1], n.centroid_zyx_voxel[2]) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="card"><p>Không phát hiện nodule nào trong CT này.</p></div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Thông tin kỹ thuật</h2>
+    <table>
+      <tr><td>Voxel spacing (z, y, x)</td><td>{{ "%.2f, %.2f, %.2f"|format(meta.voxel_spacing_zyx_mm[0], meta.voxel_spacing_zyx_mm[1], meta.voxel_spacing_zyx_mm[2]) }} mm</td></tr>
+      <tr><td>Pred voxels (sum)</td><td>{{ meta.pred_voxels }}</td></tr>
+      <tr><td>Đọc DICOM</td><td>{{ "%.2f"|format(meta.timing_sec.read_dicom) }} s</td></tr>
+      <tr><td>Phân vùng phổi</td><td>{{ "%.2f"|format(meta.timing_sec.lung_seg) }} s</td></tr>
+      <tr><td>AI nodule (TTA)</td><td>{{ "%.2f"|format(meta.timing_sec.ai_predict) }} s</td></tr>
+      <tr><td>Hậu xử lý + connected components</td><td>{{ "%.2f"|format(meta.timing_sec.postprocess) }} s</td></tr>
+      <tr><td>Render Plotly Mesh3d</td><td>{{ "%.2f"|format(meta.timing_sec.render_3d) }} s</td></tr>
+    </table>
+    <form action="/case/{{case_id}}/delete" method="post" onsubmit="return confirm('Xoá case này?');">
+      <button type="submit" class="danger">Xoá case</button>
+    </form>
+  </div>
+
+</div>
+</body>
+</html>

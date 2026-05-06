@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>LIDC Lung Nodule AI</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>AI Phân Tích Nodule Phổi</h1>
+    <p class="subtitle">UNet++ EfficientNet-B5 · Test Dice 0.7502 · TTA · trained on LIDC-IDRI</p>
+  </header>
+
+  <div class="card upload-card">
+    <h2>Upload CT của bệnh nhân</h2>
+    <p class="hint">Chọn 1 folder DICOM (cả thư mục .dcm) hoặc upload file .zip chứa folder đó.</p>
+
+    <form id="upload-form">
+      <label class="file-input">
+        <span>📁 Chọn folder DICOM</span>
+        <input type="file" id="files-dir" multiple webkitdirectory directory>
+      </label>
+      <label class="file-input">
+        <span>🗜️ Hoặc chọn file .zip</span>
+        <input type="file" id="files-zip" accept=".zip">
+      </label>
+      <p id="file-summary" class="file-summary"></p>
+      <button type="submit" id="submit-btn">Phân tích bằng AI</button>
+    </form>
+
+    <div id="progress" class="hidden">
+      <div class="progress-bar"><div id="bar-fill" class="bar-fill"></div></div>
+      <p id="progress-pct" class="progress-pct">0%</p>
+      <p id="progress-text">Chuẩn bị upload...</p>
+      <ul id="progress-log" class="progress-log"></ul>
+    </div>
+  </div>
+
+  {% if cases %}
+  <div class="card">
+    <h2>Lịch sử phân tích ({{cases|length}} ca)</h2>
+    <ul class="cases">
+    {% for c in cases %}
+      <li>
+        <a href="/case/{{c.id}}"><strong>{{c.name}}</strong></a>
+        <span class="meta">{{c.n_nodules}} nodule(s) · {{c.n_slices}} slices · {{c.ts}}</span>
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <footer>
+    <p>Đồ án LIDC-IDRI · Best dice (val) 0.7421 · Slice dice (test+TTA) 0.7502 · Recall nodule 97.5%</p>
+  </footer>
+</div>
+
+<script>
+const dirInput = document.getElementById("files-dir");
+const zipInput = document.getElementById("files-zip");
+const summary = document.getElementById("file-summary");
+
+function updateSummary() {
+  const n = dirInput.files.length;
+  const z = zipInput.files.length;
+  if (n) summary.textContent = `Đã chọn ${n} file từ folder.`;
+  else if (z) summary.textContent = `Đã chọn ${zipInput.files[0].name}.`;
+  else summary.textContent = "";
+}
+dirInput.addEventListener("change", updateSummary);
+zipInput.addEventListener("change", updateSummary);
+
+const barFill = document.getElementById("bar-fill");
+const pctText = document.getElementById("progress-pct");
+const progText = document.getElementById("progress-text");
+const progLog = document.getElementById("progress-log");
+
+function setProgress(pct, msg) {
+  if (pct >= 0) {
+    barFill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    pctText.textContent = pct + "%";
+  }
+  if (msg) progText.textContent = msg;
+}
+function logLine(msg, kind) {
+  const li = document.createElement("li");
+  li.textContent = msg;
+  if (kind) li.className = kind;
+  progLog.appendChild(li);
+  progLog.scrollTop = progLog.scrollHeight;
+}
+
+document.getElementById("upload-form").onsubmit = (e) => {
+  e.preventDefault();
+  const fd = new FormData();
+  for (const f of dirInput.files) fd.append("files", f, f.webkitRelativePath || f.name);
+  for (const f of zipInput.files) fd.append("files", f);
+  if (!fd.has("files")) { alert("Vui lòng chọn folder hoặc file .zip."); return; }
+  document.getElementById("submit-btn").disabled = true;
+  document.getElementById("progress").classList.remove("hidden");
+  while (progLog.firstChild) progLog.removeChild(progLog.firstChild);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/analyze");
+  xhr.upload.onprogress = (ev) => {
+    if (ev.lengthComputable) {
+      const upPct = Math.round(ev.loaded / ev.total * 100);
+      setProgress(Math.round(upPct * 0.3),
+                  `Đang upload ${(ev.loaded/1048576).toFixed(1)} / ${(ev.total/1048576).toFixed(1)} MB`);
+    }
+  };
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      progText.textContent = "Lỗi upload: " + xhr.status;
+      logLine(xhr.responseText, "err");
+      return;
+    }
+    const r = JSON.parse(xhr.responseText);
+    logLine(`Upload xong (${r.n_dicoms} DICOM). Bắt đầu AI...`, "ok");
+    setProgress(30, "Server nhận file, đang khởi động AI...");
+
+    const es = new EventSource(`/events/${r.case_id}`);
+    es.onmessage = (ev) => {
+      const d = JSON.parse(ev.data);
+      logLine(`${d.pct >= 0 ? d.pct + "%" : "ERR"} — ${d.msg}`, d.pct < 0 ? "err" : "");
+      if (d.pct >= 0) setProgress(d.pct, d.msg);
+      if (d.pct === 100) {
+        es.close();
+        setTimeout(() => { window.location.href = `/case/${r.case_id}`; }, 600);
+      }
+      if (d.pct === -1) { es.close(); }
+    };
+    es.onerror = () => { /* server may close after DONE */ };
+  };
+  xhr.onerror = () => { progText.textContent = "Lỗi mạng khi upload."; };
+  xhr.send(fd);
+};
+</script>
+</body>
+</html>

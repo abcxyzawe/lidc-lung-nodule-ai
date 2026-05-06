@@ -1,0 +1,45 @@
+# Data — too big and not redistributable
+manifest-1600709154662/
+tcia-lidc-xml/
+*.xml
+
+# Generated artifacts
+work/
+outputs/
+src/webapp/uploads/
+src/webapp/results/
+
+# Model files
+*.pt
+*.pth
+*.h5
+*.npy
+*.stl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+
+# Local sessions / archives
+.claude/
+*.tar
+*.tar.gz
+*.zip

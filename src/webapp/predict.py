@@ -1,0 +1,244 @@
+"""Inference + lung segmentation + 3D rendering for the webapp.
+
+- Reads a list of DICOM paths
+- HU-threshold lung segmentation (no extra model)
+- best.pt nodule segmentation (TTA)
+- 3D Plotly Mesh3d: lung shell transparent + each nodule as a separate mesh
+"""
+from pathlib import Path
+import sys
+
+import numpy as np
+import torch
+import pydicom
+from scipy.ndimage import (
+    label as cc_label,
+    binary_closing,
+    binary_fill_holes,
+)
+from skimage import measure
+import plotly.graph_objects as go
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from configs import HU_LO, HU_HI, MIN_NODULE_VOXELS, RUNS_DIR
+from importlib import import_module
+make_model = import_module("05_train").make_model
+
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_MODEL = None
+
+
+def get_model(ckpt_path: Path = None):
+    global _MODEL
+    if _MODEL is None:
+        ckpt_path = ckpt_path or (RUNS_DIR / "best.pt")
+        ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+        encoder = ck.get("encoder", "efficientnet-b5")
+        m = make_model(encoder=encoder, pretrained=None).to(DEVICE)
+        m.load_state_dict(ck["model"])
+        m.train(False)
+        _MODEL = m
+        print(f"Model loaded ({encoder}) on {DEVICE}, ckpt={ckpt_path.name}")
+    return _MODEL
+
+
+def normalize(x):
+    x = np.clip(x.astype(np.float32), HU_LO, HU_HI)
+    return (x - HU_LO) / (HU_HI - HU_LO)
+
+
+def read_dicom_series(dcm_paths):
+    """Read DICOMs, sort by z, return (volume_int16 [N,512,512], voxel_sp_zyx_mm)."""
+    H = W = 512
+    slices = []
+    for p in dcm_paths:
+        try:
+            ds = pydicom.dcmread(str(p), force=True)
+            z = float(ds.ImagePositionPatient[2])
+            slices.append((z, ds))
+        except Exception:
+            continue
+    if not slices:
+        raise ValueError("Không đọc được DICOM nào hợp lệ.")
+    slices.sort(key=lambda x: x[0])
+    N = len(slices)
+    vol = np.zeros((N, H, W), dtype=np.int16)
+    for i, (_, ds) in enumerate(slices):
+        try:
+            arr = ds.pixel_array
+        except Exception:
+            ds.file_meta.TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+            arr = ds.pixel_array
+        if arr.shape != (H, W):
+            pad = np.zeros((H, W), dtype=arr.dtype)
+            pad[: min(arr.shape[0], H), : min(arr.shape[1], W)] = arr[:H, :W]
+            arr = pad
+        slope = float(getattr(ds, "RescaleSlope", 1) or 1)
+        inter = float(getattr(ds, "RescaleIntercept", 0) or 0)
+        vol[i] = (arr.astype(np.float32) * slope + inter).astype(np.int16)
+    pix = list(map(float, getattr(slices[0][1], "PixelSpacing", [1.0, 1.0])))
+    thk = float(getattr(slices[0][1], "SliceThickness", 1.0) or 1.0)
+    if len(slices) > 1:
+        z_gap = abs(slices[1][0] - slices[0][0])
+        if z_gap > 0:
+            thk = z_gap
+    voxel_sp = (thk, pix[0], pix[1])
+    return vol, voxel_sp
+
+
+def segment_lung(volume_hu):
+    """HU-threshold based lung mask. Returns uint8 [N,H,W]."""
+    air = volume_hu < -320
+    body = ~air
+    body_filled = np.zeros_like(body)
+    for i in range(body.shape[0]):
+        body_filled[i] = binary_fill_holes(body[i])
+    lung = air & body_filled
+    lung = binary_closing(lung, structure=np.ones((1, 3, 3)))
+    lab, n = cc_label(lung)
+    if n == 0:
+        return np.zeros_like(lung, dtype=np.uint8)
+    sizes = np.bincount(lab.ravel())
+    sizes[0] = 0
+    keep = np.zeros_like(lab, dtype=bool)
+    kept = 0
+    for cid in np.argsort(sizes)[::-1]:
+        if sizes[cid] < 5000:
+            break
+        keep |= lab == cid
+        kept += 1
+        if kept >= 2:
+            break
+    return keep.astype(np.uint8)
+
+
+def predict_nodules(volume_hu, threshold=0.5, tta=True, progress=None):
+    """Run model slice-by-slice with optional TTA. Returns (prob, mask)."""
+    model = get_model()
+    N, H, W = volume_hu.shape
+    prob = np.zeros((N, H, W), dtype=np.float32)
+    with torch.no_grad():
+        for i in range(N):
+            ip = max(0, i - 1)
+            ine = min(N - 1, i + 1)
+            stk = np.stack(
+                [normalize(volume_hu[ip]), normalize(volume_hu[i]), normalize(volume_hu[ine])],
+                axis=0,
+            )
+            x = torch.from_numpy(stk).unsqueeze(0).float().to(DEVICE)
+            with torch.amp.autocast("cuda", enabled=DEVICE.type == "cuda"):
+                p1 = torch.sigmoid(model(x))
+                if tta:
+                    p2 = torch.sigmoid(model(torch.flip(x, dims=[-1]))).flip(dims=[-1])
+                    p3 = torch.sigmoid(model(torch.flip(x, dims=[-2]))).flip(dims=[-2])
+                    p4 = torch.sigmoid(model(torch.flip(x, dims=[-1, -2]))).flip(dims=[-1, -2])
+                    p = (p1 + p2 + p3 + p4) / 4
+                else:
+                    p = p1
+            prob[i] = p[0, 0].float().cpu().numpy()
+            if progress and i % 4 == 0:
+                progress(i, N)
+    mask = (prob > threshold).astype(np.uint8)
+    return prob, mask
+
+
+def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS):
+    structure = np.ones((3, 3, 3), dtype=np.uint8)
+    lab, n = cc_label(mask_3d, structure=structure)
+    out = []
+    for i in range(1, n + 1):
+        coords = np.argwhere(lab == i)
+        if len(coords) < min_voxels:
+            continue
+        c = coords.mean(0)
+        bmin = coords.min(0)
+        bmax = coords.max(0) + 1
+        vol_mm3 = float(len(coords)) * float(np.prod(voxel_sp))
+        diam = 2 * (3 * vol_mm3 / (4 * np.pi)) ** (1 / 3)
+        out.append({
+            "id": int(i),
+            "voxels": int(len(coords)),
+            "volume_mm3": vol_mm3,
+            "diameter_mm": float(diam),
+            "centroid_zyx_voxel": [float(v) for v in c],
+            "bbox_zyx_voxel": [int(v) for v in bmin] + [int(v) for v in bmax],
+        })
+    out.sort(key=lambda n: n["volume_mm3"], reverse=True)
+    return out, lab
+
+
+def render_3d_html(lung_mask, pred_mask, voxel_sp, labeled_pred, nodules, title="",
+                   max_nodule_meshes=30):
+    """Plotly Mesh3d: lung shell (transparent) + per-nodule meshes (solid red).
+
+    For speed, only the top-N largest nodules are rendered as meshes.
+    Lung mesh uses coarse step_size=3 to keep triangle count manageable.
+    """
+    fig = go.Figure()
+
+    if lung_mask.sum() > 1000:
+        try:
+            v, f, _, _ = measure.marching_cubes(
+                lung_mask.astype(np.float32), level=0.5, spacing=voxel_sp, step_size=3,
+            )
+            fig.add_trace(go.Mesh3d(
+                x=v[:, 2], y=v[:, 1], z=v[:, 0],
+                i=f[:, 0], j=f[:, 1], k=f[:, 2],
+                color="#a5d8ff", opacity=0.10,
+                name="Phổi (lung shell)", showlegend=True,
+                flatshading=True, hoverinfo="skip",
+            ))
+        except Exception as e:
+            print("lung mesh failed:", e)
+
+    palette = ["#ff4d4d", "#ff8c42", "#ffd166", "#ef476f",
+               "#f15bb5", "#9b5de5", "#ff5d8f", "#fb8500"]
+    nodules_to_render = nodules[:max_nodule_meshes]
+    for k, nod in enumerate(nodules_to_render):
+        nid = nod["id"]
+        zmin, ymin, xmin, zmax, ymax, xmax = nod["bbox_zyx_voxel"]
+        # Pad bbox by 1 voxel for clean marching cubes boundary
+        zmin = max(0, zmin - 1); ymin = max(0, ymin - 1); xmin = max(0, xmin - 1)
+        zmax = min(labeled_pred.shape[0], zmax + 1)
+        ymax = min(labeled_pred.shape[1], ymax + 1)
+        xmax = min(labeled_pred.shape[2], xmax + 1)
+        blob = (labeled_pred[zmin:zmax, ymin:ymax, xmin:xmax] == nid).astype(np.float32)
+        if blob.sum() < MIN_NODULE_VOXELS:
+            continue
+        try:
+            v, f, _, _ = measure.marching_cubes(
+                blob, level=0.5, spacing=voxel_sp, step_size=1,
+            )
+            # Translate vertices back to full-volume coordinates (mm)
+            v[:, 0] += zmin * voxel_sp[0]
+            v[:, 1] += ymin * voxel_sp[1]
+            v[:, 2] += xmin * voxel_sp[2]
+        except Exception:
+            continue
+        fig.add_trace(go.Mesh3d(
+            x=v[:, 2], y=v[:, 1], z=v[:, 0],
+            i=f[:, 0], j=f[:, 1], k=f[:, 2],
+            color=palette[k % len(palette)], opacity=0.85,
+            name=f"Nodule #{nid} (~{nod['diameter_mm']:.1f} mm)",
+            showlegend=True, flatshading=True,
+        ))
+    if len(nodules) > max_nodule_meshes:
+        title += f"  (hiển thị {max_nodule_meshes}/{len(nodules)} nodule lớn nhất)"
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(color="white", size=14)),
+        scene=dict(
+            aspectmode="data",
+            xaxis=dict(title="X (mm)", color="white", gridcolor="#333"),
+            yaxis=dict(title="Y (mm)", color="white", gridcolor="#333"),
+            zaxis=dict(title="Z (mm)", color="white", gridcolor="#333"),
+            bgcolor="rgb(15,17,23)",
+        ),
+        margin=dict(l=0, r=0, t=40, b=0),
+        paper_bgcolor="rgb(15,17,23)",
+        font=dict(color="white"),
+        legend=dict(font=dict(color="white"), bgcolor="rgba(0,0,0,0.4)"),
+        height=720,
+    )
+    return fig.to_html(include_plotlyjs="cdn", full_html=False, div_id="plot3d")
