@@ -41,6 +41,12 @@ async def lifespan(_app: FastAPI):
     print("Warming up models on GPU...")
     get_model()
     get_malignancy_model()
+    # Warm lung segmentation model too
+    from predict import _get_lung_inferer
+    try:
+        _get_lung_inferer()
+    except Exception as e:
+        print(f"Lung inferer warmup failed: {e}")
     print("Ready. http://127.0.0.1:8081")
     yield
 
@@ -111,8 +117,8 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
         pred = (pred & lung).astype("uint8")
         _emit(case_id, 82, f"Lọc nodule trong phổi — còn {int(pred.sum()):,} voxel")
 
-        t0 = time.time(); nodules, labeled = find_nodules(pred, voxel_sp); t["postprocess"] = time.time() - t0
-        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện")
+        t0 = time.time(); nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=60); t["postprocess"] = time.time() - t0
+        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện (≥ ~4.5mm)")
 
         t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
         n_high = sum(1 for n in nodules if n.get("risk_combined") == "high")

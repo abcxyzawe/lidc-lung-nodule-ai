@@ -28,6 +28,7 @@ make_model = import_module("05_train").make_model
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _MODEL = None
 _MALIGNANCY_MODEL = None
+_LUNG_INFERER = None
 _MAL_HU = (-1024.0, 600.0)
 _MAL_PATCH = 32
 
@@ -114,30 +115,46 @@ def read_dicom_series(dcm_paths):
     return vol, voxel_sp
 
 
+def _get_lung_inferer():
+    """Lazy-load the pretrained lung segmentation U-Net (Hofmanninger 2020)."""
+    global _LUNG_INFERER
+    if _LUNG_INFERER is None:
+        from lungmask import LMInferer
+        _LUNG_INFERER = LMInferer(modelname="R231", force_cpu=False)
+        print("Lungmask LMInferer (R231) loaded.")
+    return _LUNG_INFERER
+
+
 def segment_lung(volume_hu):
-    """HU-threshold based lung mask. Returns uint8 [N,H,W]."""
-    air = volume_hu < -320
-    body = ~air
-    body_filled = np.zeros_like(body)
-    for i in range(body.shape[0]):
-        body_filled[i] = binary_fill_holes(body[i])
-    lung = air & body_filled
-    lung = binary_closing(lung, structure=np.ones((1, 3, 3)))
-    lab, n = cc_label(lung)
-    if n == 0:
-        return np.zeros_like(lung, dtype=np.uint8)
-    sizes = np.bincount(lab.ravel())
-    sizes[0] = 0
-    keep = np.zeros_like(lab, dtype=bool)
-    kept = 0
-    for cid in np.argsort(sizes)[::-1]:
-        if sizes[cid] < 5000:
-            break
-        keep |= lab == cid
-        kept += 1
-        if kept >= 2:
-            break
-    return keep.astype(np.uint8)
+    """Pretrained U-Net lung segmentation (lungmask R231). Returns uint8 [N,H,W].
+
+    Falls back to a HU-threshold heuristic if lungmask fails.
+    Output mask: 1 = lung tissue (left + right merged), 0 = elsewhere.
+    """
+    try:
+        inferer = _get_lung_inferer()
+        mask = inferer.apply(volume_hu.astype(np.int16))  # returns 0/1/2 (bg / right / left)
+        return (mask > 0).astype(np.uint8)
+    except Exception as e:
+        print(f"lungmask failed ({e!r}); falling back to HU heuristic")
+        air = volume_hu < -320
+        body = ~air
+        body_filled = np.zeros_like(body)
+        for i in range(body.shape[0]):
+            body_filled[i] = binary_fill_holes(body[i])
+        lung = air & body_filled
+        lung = binary_closing(lung, structure=np.ones((1, 3, 3)))
+        lab, n = cc_label(lung)
+        if n == 0:
+            return np.zeros_like(lung, dtype=np.uint8)
+        sizes = np.bincount(lab.ravel()); sizes[0] = 0
+        keep = np.zeros_like(lab, dtype=bool); kept = 0
+        for cid in np.argsort(sizes)[::-1]:
+            if sizes[cid] < 5000: break
+            keep |= lab == cid
+            kept += 1
+            if kept >= 2: break
+        return keep.astype(np.uint8)
 
 
 def predict_nodules(volume_hu, threshold=0.5, tta=True, progress=None):
@@ -171,17 +188,17 @@ def predict_nodules(volume_hu, threshold=0.5, tta=True, progress=None):
 
 
 def lung_rads(diameter_mm: float) -> dict:
-    """Map nodule diameter to Lung-RADS-style risk band (size-based heuristic).
+    """Lung-RADS for solid nodules at baseline screening (simplified, size-only).
 
-    This is a simplified mapping for solid nodules — real Lung-RADS also
-    uses solid/sub-solid distinction and growth over time.
+    Real Lung-RADS also considers solid/sub-solid type, growth, calcification.
+    Here size is the only signal we have automatically.
     """
     d = diameter_mm
-    if d < 6:    return {"category": "2",   "label": "Benign appearance",     "risk": "low"}
-    if d < 8:    return {"category": "3",   "label": "Probably benign",       "risk": "low"}
-    if d < 15:   return {"category": "4A",  "label": "Suspicious",            "risk": "medium"}
-    if d < 30:   return {"category": "4B",  "label": "Very suspicious",       "risk": "high"}
-    return       {"category": "4X",  "label": "Highly suspicious",     "risk": "high"}
+    if d < 6:    return {"category": "2",  "label": "Bỏ qua (< 6mm, không cần theo dõi)", "size_risk": "low"}
+    if d < 8:    return {"category": "3",  "label": "Theo dõi 6 tháng",                   "size_risk": "low"}
+    if d < 15:   return {"category": "4A", "label": "Đáng nghi (chụp lại 3 tháng)",       "size_risk": "medium"}
+    if d < 30:   return {"category": "4B", "label": "Rất đáng nghi (PET-CT/sinh thiết)",  "size_risk": "high"}
+    return       {"category": "4X", "label": "Cực kỳ đáng nghi (sinh thiết)",      "size_risk": "high"}
 
 
 def predict_malignancy_for_nodules(volume_hu, nodules):
@@ -237,18 +254,24 @@ def predict_malignancy_for_nodules(volume_hu, nodules):
             })
         size = lung_rads(n["diameter_mm"])
         n["lung_rads"] = size
-        if probs is not None:
-            order = {"low": 0, "medium": 1, "high": 2}
-            ai_lvl = order[n["ai_risk_label"]]
-            sz_lvl = order[size["risk"]]
-            if abs(ai_lvl - sz_lvl) <= 1:
-                # Agree (or off-by-one) → take the higher of the two
-                final = ["low", "medium", "high"][max(ai_lvl, sz_lvl)]
-            else:
-                final = "review"
-            n["risk_combined"] = final
+        d = n["diameter_mm"]
+        susp = n.get("ai_susp_prob", 0.0)
+        ai_cls = n.get("ai_class", 3)
+
+        # Clinically-tuned combined logic:
+        # < 6mm = always LOW per Lung-RADS (incidental, no follow-up). AI can't override.
+        # 6-8mm = LOW unless AI is clearly suspicious (class >= 4 AND P >= 0.4)
+        # 8-15mm = MEDIUM, escalates to HIGH if AI strongly suspicious (P >= 0.5)
+        # >= 15mm = HIGH (size-driven), de-escalate to MEDIUM only if AI strongly says benign (class <= 2 AND P < 0.15)
+        if d < 6:
+            final = "low"
+        elif d < 8:
+            final = "medium" if (ai_cls >= 4 and susp >= 0.4) else "low"
+        elif d < 15:
+            final = "high" if (ai_cls >= 4 and susp >= 0.5) else "medium"
         else:
-            n["risk_combined"] = size["risk"]
+            final = "medium" if (ai_cls <= 2 and susp < 0.15) else "high"
+        n["risk_combined"] = final
     return nodules
 
 
