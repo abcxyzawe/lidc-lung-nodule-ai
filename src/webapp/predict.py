@@ -27,6 +27,9 @@ make_model = import_module("05_train").make_model
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _MODEL = None
+_MALIGNANCY_MODEL = None
+_MAL_HU = (-1024.0, 600.0)
+_MAL_PATCH = 32
 
 
 def get_model(ckpt_path: Path = None):
@@ -39,8 +42,32 @@ def get_model(ckpt_path: Path = None):
         m.load_state_dict(ck["model"])
         m.train(False)
         _MODEL = m
-        print(f"Model loaded ({encoder}) on {DEVICE}, ckpt={ckpt_path.name}")
+        print(f"Seg model loaded ({encoder}) on {DEVICE}, ckpt={ckpt_path.name}")
     return _MODEL
+
+
+def get_malignancy_model(ckpt_path: Path = None):
+    """Lazy-load the 3D malignancy classifier (5-class). Returns None if not available."""
+    global _MALIGNANCY_MODEL, _MAL_HU, _MAL_PATCH
+    if _MALIGNANCY_MODEL is False:
+        return None
+    if _MALIGNANCY_MODEL is None:
+        ckpt_path = ckpt_path or (RUNS_DIR / "malignancy.pt")
+        if not ckpt_path.exists():
+            print(f"Malignancy classifier not found at {ckpt_path}; skipping risk score.")
+            _MALIGNANCY_MODEL = False
+            return None
+        from monai.networks.nets import DenseNet121
+        ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+        n_classes = int(ck.get("n_classes", 5))
+        _MAL_PATCH = int(ck.get("patch_size", 32))
+        _MAL_HU = (float(ck.get("hu_lo", -1024)), float(ck.get("hu_hi", 600)))
+        m = DenseNet121(spatial_dims=3, in_channels=1, out_channels=n_classes).to(DEVICE)
+        m.load_state_dict(ck["model"])
+        m.train(False)
+        _MALIGNANCY_MODEL = m
+        print(f"Malignancy model loaded (DenseNet121-3D, {n_classes} classes), patch {_MAL_PATCH}^3")
+    return _MALIGNANCY_MODEL
 
 
 def normalize(x):
@@ -141,6 +168,88 @@ def predict_nodules(volume_hu, threshold=0.5, tta=True, progress=None):
                 progress(i, N)
     mask = (prob > threshold).astype(np.uint8)
     return prob, mask
+
+
+def lung_rads(diameter_mm: float) -> dict:
+    """Map nodule diameter to Lung-RADS-style risk band (size-based heuristic).
+
+    This is a simplified mapping for solid nodules — real Lung-RADS also
+    uses solid/sub-solid distinction and growth over time.
+    """
+    d = diameter_mm
+    if d < 6:    return {"category": "2",   "label": "Benign appearance",     "risk": "low"}
+    if d < 8:    return {"category": "3",   "label": "Probably benign",       "risk": "low"}
+    if d < 15:   return {"category": "4A",  "label": "Suspicious",            "risk": "medium"}
+    if d < 30:   return {"category": "4B",  "label": "Very suspicious",       "risk": "high"}
+    return       {"category": "4X",  "label": "Highly suspicious",     "risk": "high"}
+
+
+def predict_malignancy_for_nodules(volume_hu, nodules):
+    """For each nodule, extract a 32^3 patch around centroid and classify.
+
+    Adds keys to each nodule dict:
+        ai_class:        argmax 1..5 (1=very benign, 5=very malignant)
+        ai_expected:     expected value of malignancy (sum k * P(k))
+        ai_susp_prob:    P(class >= 4)  in [0..1]
+        ai_risk_label:   "low" | "medium" | "high"
+        lung_rads:       size-based dict (cat, label, risk)
+        risk_combined:   fused label: agree -> max(ai_risk, size_risk); else "review"
+    """
+    model = get_malignancy_model()
+    P = _MAL_PATCH
+    H = P // 2
+    N, Hv, Wv = volume_hu.shape
+
+    if model is not None and nodules:
+        # Build patch tensor
+        patches = []
+        for n in nodules:
+            cz, cy, cx = [int(round(c)) for c in n["centroid_zyx_voxel"]]
+            zmin = max(0, cz - H); zmax = min(N, cz + H)
+            ymin = max(0, cy - H); ymax = min(Hv, cy + H)
+            xmin = max(0, cx - H); xmax = min(Wv, cx + H)
+            crop = volume_hu[zmin:zmax, ymin:ymax, xmin:xmax].astype(np.float32)
+            crop = np.clip(crop, _MAL_HU[0], _MAL_HU[1])
+            crop = (crop - _MAL_HU[0]) / (_MAL_HU[1] - _MAL_HU[0])
+            padded = np.zeros((P, P, P), dtype=np.float32)
+            pz0 = H - (cz - zmin); py0 = H - (cy - ymin); px0 = H - (cx - xmin)
+            padded[pz0:pz0+crop.shape[0], py0:py0+crop.shape[1], px0:px0+crop.shape[2]] = crop
+            patches.append(padded)
+        x = torch.from_numpy(np.stack(patches, 0)).unsqueeze(1).float().to(DEVICE)
+        with torch.no_grad(), torch.amp.autocast("cuda", enabled=DEVICE.type == "cuda"):
+            logits = model(x)
+            probs = torch.softmax(logits, dim=1).cpu().numpy()
+    else:
+        probs = None
+
+    for i, n in enumerate(nodules):
+        if probs is not None:
+            p = probs[i]  # [5]
+            cls = int(p.argmax()) + 1
+            expected = float(sum((k + 1) * p[k] for k in range(len(p))))
+            susp = float(p[3] + p[4]) if len(p) >= 5 else 0.0
+            ai_risk = "high" if susp >= 0.5 else ("medium" if susp >= 0.25 else "low")
+            n.update({
+                "ai_class": cls,
+                "ai_expected": expected,
+                "ai_susp_prob": susp,
+                "ai_risk_label": ai_risk,
+            })
+        size = lung_rads(n["diameter_mm"])
+        n["lung_rads"] = size
+        if probs is not None:
+            order = {"low": 0, "medium": 1, "high": 2}
+            ai_lvl = order[n["ai_risk_label"]]
+            sz_lvl = order[size["risk"]]
+            if abs(ai_lvl - sz_lvl) <= 1:
+                # Agree (or off-by-one) → take the higher of the two
+                final = ["low", "medium", "high"][max(ai_lvl, sz_lvl)]
+            else:
+                final = "review"
+            n["risk_combined"] = final
+        else:
+            n["risk_combined"] = size["risk"]
+    return nodules
 
 
 def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS):

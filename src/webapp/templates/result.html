@@ -27,26 +27,52 @@
 
   {% if meta.nodules %}
   <div class="card">
-    <h2>Danh sách nodule chi tiết</h2>
+    <h2>Danh sách nodule + đánh giá nguy cơ</h2>
+    <p class="hint">
+      <span class="risk-pill risk-high">cao</span> = AI cho điểm ≥ 4/5 hoặc đường kính &gt; 15mm.
+      <span class="risk-pill risk-medium">trung bình</span> = đáng theo dõi.
+      <span class="risk-pill risk-low">thấp</span> = nốt nhỏ, ít nguy cơ.
+      <span class="risk-pill risk-review">review</span> = AI và size không đồng ý → nên xem kỹ.
+    </p>
     <table>
       <thead>
         <tr>
-          <th>#</th><th>Voxels</th><th>Volume (mm³)</th>
-          <th>Đường kính (mm)</th><th>Vị trí (z, y, x)</th>
+          <th>#</th><th>Đường kính</th><th>Volume</th>
+          <th>Lung-RADS</th><th>AI score (1-5)</th><th>P(suspicious)</th>
+          <th>Đánh giá tổng</th>
         </tr>
       </thead>
       <tbody>
       {% for n in meta.nodules %}
-        <tr>
+        <tr class="risk-row risk-row-{{ n.risk_combined or 'low' }}">
           <td>{{ n.id }}</td>
-          <td>{{ n.voxels }}</td>
-          <td>{{ "%.0f"|format(n.volume_mm3) }}</td>
-          <td>{{ "%.1f"|format(n.diameter_mm) }}</td>
-          <td>{{ "%.0f, %.0f, %.0f"|format(n.centroid_zyx_voxel[0], n.centroid_zyx_voxel[1], n.centroid_zyx_voxel[2]) }}</td>
+          <td>{{ "%.1f"|format(n.diameter_mm) }} mm</td>
+          <td>{{ "%.0f"|format(n.volume_mm3) }} mm³</td>
+          <td>
+            <strong>LR {{ n.lung_rads.category }}</strong>
+            <small class="dim">{{ n.lung_rads.label }}</small>
+          </td>
+          <td>
+            {% if n.ai_class is defined %}
+              <strong>{{ n.ai_class }}</strong>
+              <small class="dim">(EV {{ "%.2f"|format(n.ai_expected) }})</small>
+            {% else %}<small class="dim">—</small>{% endif %}
+          </td>
+          <td>
+            {% if n.ai_susp_prob is defined %}
+              {{ "%.0f"|format(n.ai_susp_prob * 100) }}%
+            {% else %}<small class="dim">—</small>{% endif %}
+          </td>
+          <td><span class="risk-pill risk-{{ n.risk_combined or 'low' }}">{{ n.risk_combined or 'low' }}</span></td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
+    <p class="hint">
+      <strong>AI score:</strong> 1 = lành tính · 5 = ác tính (4-5 = suspicious).
+      <strong>EV (expected value)</strong> = giá trị kỳ vọng theo phân bố softmax.
+      <strong>Lung-RADS</strong> theo đường kính (heuristic, không thay thế bác sĩ).
+    </p>
   </div>
   {% else %}
     <div class="card"><p>Không phát hiện nodule nào trong CT này.</p></div>

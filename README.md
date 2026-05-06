@@ -1,9 +1,16 @@
 # LIDC-IDRI Lung Nodule AI — End-to-End Pipeline + Webapp
 
-Đồ án phát hiện nodule phổi từ ảnh CT (LIDC-IDRI dataset).
-Bao gồm full pipeline (validate → preprocess → train → eval → 3D detect → render) **và webapp FastAPI** để demo trực tiếp với GPU local.
+Đồ án phát hiện + phân loại nodule phổi từ ảnh CT (LIDC-IDRI dataset).
 
-**Kết quả:** Test slice Dice **0.7502** (TTA) · Per-slice median 0.8559 · Recall nodule 97.5%.
+**2 model AI hoạt động cùng nhau:**
+1. **Segmentation** — UNet++ EfficientNet-B5 (tìm vị trí nodule)
+2. **Malignancy classifier** — DenseNet121-3D (phân loại 1-5: lành tính → ác tính)
+
+Kết hợp với **Lung-RADS heuristic** theo đường kính → đánh giá nguy cơ "low / medium / high / review".
+
+**Kết quả:**
+- Segmentation: Test slice Dice **0.7502** (TTA), recall nodule 97.5%
+- Malignancy: 5-class bal_acc **0.46** (val), suspicious-F1 **0.65** (val) / 0.50 (test)
 
 ---
 
@@ -40,18 +47,15 @@ pip install -r requirements.txt
 
 ### Lấy checkpoint đã train sẵn (BẮT BUỘC cho webapp)
 
-Checkpoint không trong git (360 MB). Tải từ GitHub Release:
+Checkpoint không trong git (~400 MB). Tải từ GitHub Release v1.1:
 
 ```bash
 mkdir -p work/runs
-gh release download v1.0 -R abcxyzawe/lidc-lung-nodule-ai \
-  --pattern "best.pt" -D work/runs/
-# (Tuỳ chọn: thêm swa.pt + test_metrics.json + log.txt cho đầy đủ)
-gh release download v1.0 -R abcxyzawe/lidc-lung-nodule-ai -D work/runs/
+gh release download v1.1 -R abcxyzawe/lidc-lung-nodule-ai -D work/runs/
 ```
 
-Hoặc tải tay từ: https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/tag/v1.0
-→ đặt `best.pt` vào `work/runs/best.pt`.
+Hoặc tải tay từ: https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/tag/v1.1
+→ đặt `best.pt` (segmentation) và `malignancy.pt` (classifier) vào `work/runs/`.
 
 ### Lấy DICOM (chỉ cần nếu muốn chạy lại pipeline)
 
@@ -74,10 +78,12 @@ phan-tich-ung-thu/
 │   ├── 01_validate.py         verify DICOM ↔ XML mapping
 │   ├── 02_preprocess.py       DICOM → HDF5 (multiprocess)
 │   ├── 03_split.py            train/val/test split 8/1/1
-│   ├── 05_train.py            UNet++ + EfficientNet-B5 + SCSE
+│   ├── 05_train.py            UNet++ + EfficientNet-B5 + SCSE (segmentation)
 │   ├── 06_evaluate.py         test metrics + TTA + threshold sweep
 │   ├── 07_detect_3d.py        inference → 3D mask + nodule list
 │   ├── 08_render_3d.py        Plotly HTML + STL + PNG
+│   ├── 09_extract_patches.py  crop 32³ patches + malignancy labels
+│   ├── 10_train_malignancy.py DenseNet121-3D classifier (1-5)
 │   └── webapp/                FastAPI demo
 │       ├── app.py             server + endpoints
 │       ├── predict.py         lung seg + AI inference + 3D render
@@ -117,6 +123,12 @@ python app.py
 - Webapp chỉ hiện top-30 nodule lớn nhất ra 3D (tránh render quá nặng), bảng full vẫn liệt kê hết.
 - Pred được lọc giao với vùng phổi → bỏ FP toàn thân.
 - Threshold mặc định 0.5, MIN_NODULE_VOXELS=30 (~3.5mm). Đổi trong `src/configs.py` nếu cần.
+
+**Đánh giá nguy cơ trong webapp:**
+- **Lung-RADS theo size**: < 6mm = LR2 lành · 6-8mm = LR3 · 8-15mm = LR4A đáng nghi · 15-30mm = LR4B · > 30mm = LR4X
+- **AI score 1-5**: DenseNet121-3D phân loại từ patch 32³ HU
+- **P(suspicious)** = softmax(class ≥ 4)
+- **Đánh giá tổng**: kết hợp AI + size, "review" nếu hai bên không đồng ý
 
 ---
 

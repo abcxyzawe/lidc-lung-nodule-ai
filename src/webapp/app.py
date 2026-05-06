@@ -19,7 +19,9 @@ from fastapi.templating import Jinja2Templates
 
 from predict import (
     find_nodules,
+    get_malignancy_model,
     get_model,
+    predict_malignancy_for_nodules,
     predict_nodules,
     read_dicom_series,
     render_3d_html,
@@ -36,8 +38,9 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    print("Warming up model on GPU...")
+    print("Warming up models on GPU...")
     get_model()
+    get_malignancy_model()
     print("Ready. http://127.0.0.1:8081")
     yield
 
@@ -109,7 +112,12 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
         _emit(case_id, 82, f"Lọc nodule trong phổi — còn {int(pred.sum()):,} voxel")
 
         t0 = time.time(); nodules, labeled = find_nodules(pred, voxel_sp); t["postprocess"] = time.time() - t0
-        _emit(case_id, 88, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện")
+        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện")
+
+        t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
+        n_high = sum(1 for n in nodules if n.get("risk_combined") == "high")
+        n_med = sum(1 for n in nodules if n.get("risk_combined") == "medium")
+        _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — {n_high} cao, {n_med} trung bình")
 
         t0 = time.time()
         html_3d = render_3d_html(
