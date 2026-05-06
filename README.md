@@ -38,9 +38,26 @@ pip install -r requirements.txt
   ```
 - Hoặc chỉnh `LIDC_ROOT` trong env: `export LIDC_ROOT=/đường/dẫn/khác`.
 
-### Lấy checkpoint đã train sẵn (cho webapp)
-Trained checkpoints không nằm trong git (~1.2 GB). Hỏi người trong team file `work/runs/best.pt` (hoặc `swa.pt`).
-Để vào `work/runs/best.pt` là chạy webapp được ngay.
+### Lấy checkpoint đã train sẵn (BẮT BUỘC cho webapp)
+
+Checkpoint không trong git (360 MB). Tải từ GitHub Release:
+
+```bash
+mkdir -p work/runs
+gh release download v1.0 -R abcxyzawe/lidc-lung-nodule-ai \
+  --pattern "best.pt" -D work/runs/
+# (Tuỳ chọn: thêm swa.pt + test_metrics.json + log.txt cho đầy đủ)
+gh release download v1.0 -R abcxyzawe/lidc-lung-nodule-ai -D work/runs/
+```
+
+Hoặc tải tay từ: https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/tag/v1.0
+→ đặt `best.pt` vào `work/runs/best.pt`.
+
+### Lấy DICOM (chỉ cần nếu muốn chạy lại pipeline)
+
+Webapp dùng DICOM của bệnh nhân nào cũng được — KHÔNG cần download LIDC-IDRI nguyên bộ. Lấy 1 vài file `.dcm` từ bất kỳ máy CT phổi nào cho upload là đủ.
+
+Nếu cần train lại từ đầu mới phải tải LIDC-IDRI từ [TCIA](https://www.cancerimagingarchive.net/collection/lidc-idri/) (~125 GB).
 
 ---
 
