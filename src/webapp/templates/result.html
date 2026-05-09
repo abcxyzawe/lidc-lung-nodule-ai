@@ -3,208 +3,266 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{meta.name}} · LungScope</title>
+<title>{{meta.name}} · Nodura</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="app">
 
-  <div class="topbar">
-    <div class="brand">
-      <div class="brand-logo">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-          <path d="M6.5 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
-          <path d="M17.5 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
-          <path d="M12 3v18M5 19l7-3 7 3"/>
-        </svg>
-      </div>
-      <div class="brand-text">
-        <h1>LungScope AI</h1>
-        <p>Kết quả phân tích</p>
-      </div>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <circle cx="12" cy="12" r="9" stroke-dasharray="2 2"/>
+        <circle cx="12" cy="12" r="5.5"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor"/>
+      </svg>
     </div>
-    <a href="/" class="back">← Trang chủ</a>
+    <div>
+      <div class="brand-name">Nodura</div>
+      <div class="brand-tag">Báo cáo phân tích · {{meta.timestamp}}</div>
+    </div>
   </div>
+  <a href="/" class="btn-ghost">← Trang chủ</a>
+</header>
 
-  <h2 class="page-title">{{meta.name}}</h2>
-  <p class="page-subtitle">Phân tích lúc {{meta.timestamp}}</p>
+<main class="page">
 
   {% set n_high = meta.nodules|selectattr('risk_combined','equalto','high')|list|length %}
   {% set n_med  = meta.nodules|selectattr('risk_combined','equalto','medium')|list|length %}
   {% set n_low  = meta.nodules|selectattr('risk_combined','equalto','low')|list|length %}
 
-  {% if n_high > 0 %}
-    <div class="banner banner-high">
-      <div class="banner-icon">!</div>
-      <div class="banner-body">
-        <div class="banner-title">{{n_high}} nodule nguy cơ CAO</div>
-        <div class="banner-text">Cần khám bác sĩ chuyên khoa hô hấp / lồng ngực.</div>
-      </div>
-    </div>
-  {% elif n_med > 0 %}
-    <div class="banner banner-medium">
-      <div class="banner-icon">⚠</div>
-      <div class="banner-body">
-        <div class="banner-title">{{n_med}} nodule cần theo dõi</div>
-        <div class="banner-text">Không cấp tính, nên chụp lại 3-6 tháng.</div>
-      </div>
-    </div>
-  {% elif meta.n_nodules > 0 %}
-    <div class="banner banner-low">
-      <div class="banner-icon">✓</div>
-      <div class="banner-body">
-        <div class="banner-title">Không phát hiện nodule đáng lo</div>
-        <div class="banner-text">Chỉ có {{n_low}} nốt nhỏ &lt; 6mm — Lung-RADS phân loại bỏ qua.</div>
-      </div>
-    </div>
-  {% else %}
-    <div class="banner banner-low">
-      <div class="banner-icon">✓</div>
-      <div class="banner-body">
-        <div class="banner-title">Phổi sạch</div>
-        <div class="banner-text">AI không tìm thấy nodule nào ≥ 4.5mm.</div>
-      </div>
-    </div>
-  {% endif %}
+  {% set verdict_kind = 'low' %}
+  {% if n_high > 0 %}{% set verdict_kind = 'high' %}
+  {% elif n_med > 0 %}{% set verdict_kind = 'medium' %}{% endif %}
 
+  <div class="page-header">
+    <h1>{{meta.name}}</h1>
+  </div>
+
+  <!-- ═══ Verdict banner ═══ -->
+  <div class="verdict {{ verdict_kind }}">
+    <div class="verdict-icon">
+      {% if verdict_kind == 'high' %}
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5.25 9a6.75 6.75 0 0 1 13.5 0v.75c0 2.123.8 4.057 2.118 5.52a.75.75 0 0 1-.297 1.206c-1.544.57-3.16.99-4.831 1.243m-7.48 0a25.797 25.797 0 0 1-4.831-1.244.75.75 0 0 1-.298-1.205A8.217 8.217 0 0 0 5.25 9.75V9Zm7.48 8.45a3 3 0 1 1-5.96 0m5.96 0a24.255 24.255 0 0 1-5.96 0"/>
+        </svg>
+      {% elif verdict_kind == 'medium' %}
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/>
+        </svg>
+      {% else %}
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>
+        </svg>
+      {% endif %}
+    </div>
+    <div class="verdict-body">
+      {% if verdict_kind == 'high' %}
+        <div class="verdict-title">Nguy cơ CAO — cần khám chuyên khoa</div>
+        <div class="verdict-text">{{n_high}} nodule có nguy cơ cao. Khuyến nghị PET-CT hoặc sinh thiết theo Lung-RADS.</div>
+      {% elif verdict_kind == 'medium' %}
+        <div class="verdict-title">Cần theo dõi định kỳ</div>
+        <div class="verdict-text">{{n_med}} nodule nguy cơ trung bình. Chụp lại CT phổi sau 3-6 tháng.</div>
+      {% elif meta.n_nodules > 0 %}
+        <div class="verdict-title">Không phát hiện nodule đáng lo</div>
+        <div class="verdict-text">Có {{n_low}} nốt nhỏ &lt; 6mm — Lung-RADS phân loại bỏ qua, không cần follow-up.</div>
+      {% else %}
+        <div class="verdict-title">Phổi sạch</div>
+        <div class="verdict-text">AI không tìm thấy nodule nào ≥ 4.5mm trong vùng phổi.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ═══ Patient context bar ═══ -->
   {% if meta.clinical %}
     {% set cli = meta.clinical %}
     {% set p = cli.patient %}
-    <div class="card">
-      <div class="card-title">Đánh giá lâm sàng</div>
-      <div class="card-sub">Dựa trên USPSTF 2021 + NICE NG12 + thông tin bệnh sử.</div>
-
-      <div class="banner {{ 'banner-high' if cli.uspstf.eligible else 'banner-low' }}">
-        <div class="banner-icon">{{ 'i' if cli.uspstf.eligible else '✓' }}</div>
-        <div class="banner-body">
-          <div class="banner-title">USPSTF screening</div>
-          <div class="banner-text">{{ cli.uspstf.message }}</div>
-        </div>
+    <div class="context-bar">
+      <div class="ctx"><span class="ctx-k">Tuổi · Giới</span><span class="ctx-v">{{ p.age }} · {{ "Nam" if p.sex == "male" else "Nữ" }}</span></div>
+      <div class="divider"></div>
+      <div class="ctx"><span class="ctx-k">Hút thuốc</span><span class="ctx-v">{{ p.pack_years }} gói-năm{% if p.currently_smoking %} (đang hút){% elif p.years_since_quit %} (bỏ {{p.years_since_quit}} năm){% endif %}</span></div>
+      <div class="divider"></div>
+      <div class="ctx"><span class="ctx-k">Tiền sử gia đình</span><span class="ctx-v">{% if p.family_hx %}Có{% else %}Không{% endif %}</span></div>
+      <div class="divider"></div>
+      <div class="ctx"><span class="ctx-k">COPD</span><span class="ctx-v">{% if p.emphysema %}Có{% else %}Không{% endif %}</span></div>
+      <div class="divider"></div>
+      <div class="ctx">
+        <span class="ctx-k">USPSTF</span>
+        <span class="uspstf-pill {% if cli.uspstf.eligible %}yes{% else %}no{% endif %}">
+          {% if cli.uspstf.eligible %}Đủ điều kiện{% else %}Không tầm soát{% endif %}
+        </span>
       </div>
-
-      {% if cli.symptoms.count > 0 %}
-        <div class="banner banner-{{ cli.symptoms.level }}">
-          <div class="banner-icon">{{ '!' if cli.symptoms.level == 'high' else '⚠' }}</div>
-          <div class="banner-body">
-            <div class="banner-title">Triệu chứng ({{cli.symptoms.count}})</div>
-            <div class="banner-text">{{ cli.symptoms.message }}</div>
-            <ul style="margin: 8px 0 0 18px; font-size: 0.86em; color: var(--text-2);">
-              {% for s in cli.symptoms.active %}
-                <li>{{ s.label }} <span class="pill {{ s.weight }}">{{ s.weight }}</span></li>
-              {% endfor %}
-            </ul>
-          </div>
-        </div>
-      {% endif %}
-
-      <p class="hint">
-        <strong>Bệnh nhân:</strong>
-        {{ p.age }} tuổi · {{ "Nam" if p.sex == "male" else "Nữ" }} ·
-        {{ p.pack_years }} gói-năm{% if p.currently_smoking %} (đang hút){% elif p.years_since_quit %} (bỏ {{p.years_since_quit}} năm){% endif %} ·
-        {% if p.family_hx %}có{% else %}không{% endif %} tiền sử gia đình ·
-        {% if p.emphysema %}có{% else %}không{% endif %} COPD
-      </p>
     </div>
+
+    {% if cli.symptoms.count > 0 %}
+    <div class="card" style="border-left: 4px solid var(--sev-{{cli.symptoms.level}});">
+      <div class="card-head">
+        <div class="card-title">Triệu chứng ({{cli.symptoms.count}})</div>
+        <span class="pill {{cli.symptoms.level}}">{{cli.symptoms.level}}</span>
+      </div>
+      <div class="card-sub">{{ cli.symptoms.message }}</div>
+      <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+        {% for s in cli.symptoms.active %}
+          <span class="pill {{ s.weight }}">{{ s.label }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
   {% endif %}
 
+  <!-- ═══ Index nodule spotlight ═══ -->
+  {% if meta.nodules %}
+  {% set idx = (meta.nodules|sort(attribute='diameter_mm', reverse=true))|first %}
+  <div class="spotlight {{ idx.risk_combined }}">
+    <div>
+      <div class="sp-label">Index nodule (lớn nhất)</div>
+      <div class="sp-id">#{{ idx.id }}</div>
+      <div class="sp-meta">
+        <strong>{{ "%.1f"|format(idx.diameter_mm) }} mm</strong>
+        · {{ idx.get('nodule_type', 'solid') }}
+        · {{ "thuỳ trên" if idx.get('upper_lobe') else "thuỳ dưới" }}
+        {% if idx.lung_rads %} · <span class="lr-tag lr-{{idx.lung_rads.category}}">LR {{idx.lung_rads.category}}</span>{% endif %}
+      </div>
+      <span class="pill {{ idx.risk_combined }}">{{ idx.risk_combined }}</span>
+    </div>
+    <div class="sp-grid">
+      <div class="sp-stat">
+        <div class="sp-stat-k">AI score</div>
+        <div class="sp-stat-v">{% if idx.get('ai_class') %}{{ idx.ai_class }}/5{% else %}—{% endif %}</div>
+      </div>
+      <div class="sp-stat">
+        <div class="sp-stat-k">P(suspicious)</div>
+        <div class="sp-stat-v">{% if idx.get('ai_susp_prob') is not none %}{{ "%.0f"|format(idx.ai_susp_prob * 100) }}%{% else %}—{% endif %}</div>
+      </div>
+      <div class="sp-stat">
+        <div class="sp-stat-k">Brock 4-yr</div>
+        <div class="sp-stat-v">{% if idx.get('brock_prob') is not none %}{{ "%.1f"|format(idx.brock_prob * 100) }}%{% else %}—{% endif %}</div>
+      </div>
+      <div class="sp-stat">
+        <div class="sp-stat-k">Volume</div>
+        <div class="sp-stat-v">{{ "%.0f"|format(idx.volume_mm3) }} mm³</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ═══ Quick stats ═══ -->
   <div class="stats">
     <div class="stat"><span class="stat-num">{{meta.n_slices}}</span><span class="stat-label">slices CT</span></div>
     <div class="stat"><span class="stat-num">{{meta.n_nodules}}</span><span class="stat-label">nodule</span></div>
     <div class="stat"><span class="stat-num low">{{n_low}}</span><span class="stat-label">low</span></div>
     <div class="stat"><span class="stat-num medium">{{n_med}}</span><span class="stat-label">medium</span></div>
     <div class="stat"><span class="stat-num high">{{n_high}}</span><span class="stat-label">high</span></div>
-    <div class="stat"><span class="stat-num">{{ "%.1f"|format(meta.timing_sec.ai_predict) }}s</span><span class="stat-label">AI</span></div>
+    <div class="stat"><span class="stat-num">{{ "%.1f"|format(meta.timing_sec.ai_predict) }}s</span><span class="stat-label">AI infer</span></div>
   </div>
 
+  <!-- ═══ 3D viewer ═══ -->
   <div class="card">
-    <div class="card-title">3D phổi + nodule</div>
+    <div class="card-head"><div class="card-title">3D phổi + nodule</div></div>
     <div class="card-sub">Vỏ phổi xanh trong suốt + nodule màu đặc. Kéo chuột xoay, scroll zoom.</div>
     <div class="plot-host">
       {{ plot_html | safe }}
     </div>
   </div>
 
+  <!-- ═══ Findings table ═══ -->
   {% if meta.nodules %}
   <div class="card">
-    <div class="card-title">Danh sách nodule</div>
-    <div class="card-sub">Sắp xếp theo kích thước. Brock = xác suất ung thư trong 4 năm.</div>
+    <div class="card-head"><div class="card-title">Tất cả nodule ({{meta.nodules|length}})</div></div>
+    <div class="card-sub">Sắp xếp theo kích thước. Index nodule có viền đỏ bên trái.</div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>#</th><th>Đường kính</th><th>Loại</th><th>Vị trí</th>
-          <th>Lung-RADS</th><th>AI score</th><th>P(susp)</th>
-          <th>Brock 4-yr</th><th>Tổng</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for n in meta.nodules %}
-        {% set lr = n.get('lung_rads') %}
-        {% set risk = n.get('risk_combined', 'low') %}
-        <tr class="row-{{ risk }}">
-          <td><strong>{{ n.id }}</strong></td>
-          <td>{{ "%.1f"|format(n.diameter_mm) }} mm</td>
-          <td><span class="small">{{ n.get('nodule_type', 'solid') }}</span></td>
-          <td><span class="small">{{ "thuỳ trên" if n.get('upper_lobe') else "thuỳ dưới" }}</span></td>
-          <td>
-            {% if lr %}
-              <strong>LR {{ lr.category }}</strong>
-              <span class="small">{{ lr.label }}</span>
-            {% else %}—{% endif %}
-          </td>
-          <td>
-            {% if n.get('ai_class') %}
-              <strong>{{ n.ai_class }}</strong>
-              <span class="small">EV {{ "%.2f"|format(n.ai_expected) }}</span>
-            {% else %}—{% endif %}
-          </td>
-          <td>{% if n.get('ai_susp_prob') is not none %}{{ "%.0f"|format(n.ai_susp_prob * 100) }}%{% else %}—{% endif %}</td>
-          <td>
-            {% if n.get('brock_prob') is not none %}
-              <span class="pill {{ n.brock_band }}">{{ "%.1f"|format(n.brock_prob * 100) }}%</span>
-            {% else %}—{% endif %}
-          </td>
-          <td><span class="pill {{ risk }}">{{ risk }}</span></td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Đường kính</th>
+            <th>Loại</th>
+            <th>Vị trí</th>
+            <th>Lung-RADS</th>
+            <th>AI</th>
+            <th>P(susp)</th>
+            <th>Brock 4-yr</th>
+            <th>Tổng</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% set sorted_nods = meta.nodules|sort(attribute='diameter_mm', reverse=true) %}
+        {% for n in sorted_nods %}
+          {% set lr = n.get('lung_rads') %}
+          {% set risk = n.get('risk_combined', 'low') %}
+          <tr class="row-{{ risk }}{% if loop.first %} row-index{% endif %}">
+            <td class="num">{{ n.id }}</td>
+            <td><strong class="num">{{ "%.1f"|format(n.diameter_mm) }}</strong> mm</td>
+            <td>{{ n.get('nodule_type', 'solid') }}</td>
+            <td>{{ "thuỳ trên" if n.get('upper_lobe') else "thuỳ dưới" }}</td>
+            <td>
+              {% if lr %}
+                <span class="lr-tag lr-{{lr.category}}">LR {{ lr.category }}</span>
+                <span class="small">{{ lr.label }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              {% if n.get('ai_class') %}
+                <strong class="num">{{ n.ai_class }}/5</strong>
+                <span class="small">EV {{ "%.2f"|format(n.ai_expected) }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="num">{% if n.get('ai_susp_prob') is not none %}{{ "%.0f"|format(n.ai_susp_prob * 100) }}%{% else %}—{% endif %}</td>
+            <td>
+              {% if n.get('brock_prob') is not none %}
+                <span class="pill {{ n.brock_band }}">{{ "%.1f"|format(n.brock_prob * 100) }}%</span>
+              {% else %}—{% endif %}
+            </td>
+            <td><span class="pill {{ risk }}">{{ risk }}</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
 
-    <p class="hint">
-      <strong>AI score 1-5:</strong> 1 = lành tính · 5 = ác tính (DenseNet121-3D trên LIDC).
-      <strong>Brock 4-yr:</strong> xác suất nodule là ung thư trong 4 năm theo McWilliams NEJM 2013.
-      <strong>Lung-RADS</strong> theo ACR v2022.
-      Thang Brock:
+    <div class="hint">
+      <strong>AI score 1-5</strong> — DenseNet121-3D phân loại malignancy (1 = lành, 5 = ác) ·
+      <strong>Brock 4-yr</strong> — xác suất ung thư 4 năm (McWilliams NEJM 2013) ·
+      <strong>Lung-RADS</strong> — chuẩn ACR v2022.
+      Brock band:
       <span class="pill low">&lt; 5%</span> theo dõi thường,
       <span class="pill medium">5-10%</span> chụp lại 3 tháng,
-      <span class="pill high">&gt; 10%</span> PET/sinh thiết.
-    </p>
+      <span class="pill high">&gt; 10%</span> PET hoặc sinh thiết.
+    </div>
   </div>
-  {% else %}
-    <div class="card empty-state">Không phát hiện nodule nào trong CT này.</div>
   {% endif %}
 
+  <!-- ═══ Methodology ═══ -->
   <div class="card">
-    <div class="card-title">Thông số kỹ thuật</div>
-    <table>
-      <tr><td>Voxel spacing (z, y, x)</td><td class="mono">{{ "%.2f, %.2f, %.2f"|format(meta.voxel_spacing_zyx_mm[0], meta.voxel_spacing_zyx_mm[1], meta.voxel_spacing_zyx_mm[2]) }} mm</td></tr>
-      <tr><td>Voxel phổi (lungmask R231)</td><td class="mono">{{ meta.lung_voxels }}</td></tr>
-      <tr><td>Voxel pred (∩ phổi)</td><td class="mono">{{ meta.pred_voxels }}</td></tr>
-      <tr><td>Đọc DICOM</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.read_dicom) }} s</td></tr>
-      <tr><td>Lung segmentation</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.lung_seg) }} s</td></tr>
-      <tr><td>Segmentation B5 + TTA</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.ai_predict) }} s</td></tr>
-      <tr><td>Connected components</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.postprocess) }} s</td></tr>
-      <tr><td>DenseNet121 malignancy</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.malignancy) }} s</td></tr>
-      {% if meta.timing_sec.clinical is defined %}
-      <tr><td>Brock + USPSTF</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.clinical) }} s</td></tr>
-      {% endif %}
-      <tr><td>Render Plotly Mesh3d</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.render_3d) }} s</td></tr>
-    </table>
+    <div class="card-head"><div class="card-title">Thông số kỹ thuật</div></div>
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><td>Voxel spacing (z, y, x)</td><td class="mono">{{ "%.2f, %.2f, %.2f"|format(meta.voxel_spacing_zyx_mm[0], meta.voxel_spacing_zyx_mm[1], meta.voxel_spacing_zyx_mm[2]) }} mm</td></tr>
+          <tr><td>Voxel phổi (lungmask R231)</td><td class="mono">{{ meta.lung_voxels }}</td></tr>
+          <tr><td>Voxel pred (∩ phổi)</td><td class="mono">{{ meta.pred_voxels }}</td></tr>
+          <tr><td>Đọc DICOM</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.read_dicom) }} s</td></tr>
+          <tr><td>Lung segmentation</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.lung_seg) }} s</td></tr>
+          <tr><td>Nodule segmentation (B5 + TTA)</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.ai_predict) }} s</td></tr>
+          <tr><td>Connected components</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.postprocess) }} s</td></tr>
+          <tr><td>Malignancy classifier</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.malignancy) }} s</td></tr>
+          {% if meta.timing_sec.clinical is defined %}
+          <tr><td>Brock + USPSTF</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.clinical) }} s</td></tr>
+          {% endif %}
+          <tr><td>Render Plotly Mesh3d</td><td class="mono">{{ "%.2f"|format(meta.timing_sec.render_3d) }} s</td></tr>
+        </tbody>
+      </table>
+    </div>
     <form action="/case/{{case_id}}/delete" method="post" onsubmit="return confirm('Xoá case này?');" style="display:inline-block">
       <button type="submit" class="btn-danger">Xoá case này</button>
     </form>
   </div>
 
-</div>
+  <footer class="foot">
+    Không thay thế chẩn đoán của bác sĩ · UNet++ B5 (seg) + DenseNet121-3D (malignancy) + Lungmask R231 + Brock 2013 + Lung-RADS v2022
+  </footer>
+
+</main>
 </body>
 </html>

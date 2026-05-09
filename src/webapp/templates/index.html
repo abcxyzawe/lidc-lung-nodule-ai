@@ -3,41 +3,44 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LungScope AI · Phân tích nodule phổi</title>
+<title>Nodura · AI phát hiện nốt phổi</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="app">
 
-  <div class="topbar">
-    <div class="brand">
-      <div class="brand-logo">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-          <path d="M6.5 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
-          <path d="M17.5 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
-          <path d="M12 3v18M5 19l7-3 7 3"/>
-        </svg>
-      </div>
-      <div class="brand-text">
-        <h1>LungScope AI</h1>
-        <p>Phát hiện nodule phổi · Brock 2013 · Lung-RADS</p>
-      </div>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <circle cx="12" cy="12" r="9" stroke-dasharray="2 2"/>
+        <circle cx="12" cy="12" r="5.5"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor"/>
+      </svg>
     </div>
-    <div class="topbar-stats">
-      <div>Test Dice <b>0.7502</b></div>
-      <div>Recall <b>97.5%</b></div>
-      <div>Brock val <b>0.46</b></div>
+    <div>
+      <div class="brand-name">Nodura</div>
+      <div class="brand-tag">Soi rõ từng nốt, an tâm từng hơi thở</div>
     </div>
   </div>
+  <div class="topbar-right">
+    <span class="stat-pill">Test Dice <b>0.7502</b></span>
+    <span class="stat-pill">Recall <b>97.5%</b></span>
+    <span class="stat-pill">Brock val <b>0.46</b></span>
+  </div>
+</header>
 
-  <h2 class="page-title">Phân tích CT mới</h2>
-  <p class="page-subtitle">Upload ảnh CT và điền thông tin lâm sàng (tuỳ chọn). AI sẽ phát hiện nodule, phân loại malignancy, và đánh giá nguy cơ ung thư theo Brock + Lung-RADS.</p>
+<main class="page">
+
+  <div class="page-header">
+    <h1>Phân tích CT phổi</h1>
+    <p>Upload ảnh CT, điền thông tin lâm sàng (tuỳ chọn). AI sẽ phát hiện nốt, phân loại malignancy, và đánh giá nguy cơ ung thư theo Brock + Lung-RADS.</p>
+  </div>
 
   <div class="card">
     <form id="upload-form">
 
-      <!-- ====== SECTION 1: File ====== -->
-      <div class="section">
+      <!-- ====== STEP 1: Files ====== -->
+      <section class="section">
         <div class="section-head">
           <div class="section-num">1</div>
           <div class="section-title">Ảnh CT (DICOM)</div>
@@ -45,26 +48,31 @@
         <div class="dropzones">
           <label class="dropzone">
             <div class="dz-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z"/>
+              </svg>
             </div>
-            <span class="dz-title">Chọn folder DICOM</span>
-            <span class="dz-sub">Cả thư mục .dcm</span>
+            <div class="dz-title">Chọn folder DICOM</div>
+            <div class="dz-sub">Cả thư mục .dcm</div>
             <input type="file" id="files-dir" multiple webkitdirectory directory>
           </label>
           <label class="dropzone">
             <div class="dz-icon">
-              <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3.375 7.5h17.25M3.375 7.5a1.125 1.125 0 0 1-1.125-1.125v-1.5A1.125 1.125 0 0 1 3.375 3.75h17.25a1.125 1.125 0 0 1 1.125 1.125v1.5A1.125 1.125 0 0 1 20.625 7.5M3.375 7.5v11.25A2.25 2.25 0 0 0 5.625 21h12.75a2.25 2.25 0 0 0 2.25-2.25V7.5"/>
+                <path d="M10 12h4"/>
+              </svg>
             </div>
-            <span class="dz-title">Chọn file .zip</span>
-            <span class="dz-sub">Folder DICOM đã nén</span>
+            <div class="dz-title">Chọn file .zip</div>
+            <div class="dz-sub">Folder DICOM đã nén</div>
             <input type="file" id="files-zip" accept=".zip">
           </label>
         </div>
-        <p id="file-summary" class="file-summary"></p>
-      </div>
+        <div id="file-summary" class="file-summary"></div>
+      </section>
 
-      <!-- ====== SECTION 2: Patient ====== -->
-      <div class="section">
+      <!-- ====== STEP 2: Patient ====== -->
+      <section class="section">
         <div class="section-head">
           <div class="section-num">2</div>
           <div class="section-title">Bệnh nhân<span class="opt">— bỏ trống nếu chưa rõ</span></div>
@@ -94,43 +102,43 @@
         <div class="chip-row">
           <label class="chip">
             <input type="checkbox" name="currently_smoking">
-            <div class="chip-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
-            <span class="chip-label">Đang hút thuốc</span>
+            <div class="chip-box"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span class="chip-text">Đang hút thuốc</span>
           </label>
           <label class="chip">
             <input type="checkbox" name="family_hx">
-            <div class="chip-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
-            <span class="chip-label">Tiền sử gia đình ung thư phổi</span>
+            <div class="chip-box"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span class="chip-text">Tiền sử gia đình ung thư phổi</span>
           </label>
           <label class="chip">
             <input type="checkbox" name="emphysema">
-            <div class="chip-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
-            <span class="chip-label">COPD / khí phế thũng</span>
+            <div class="chip-box"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span class="chip-text">COPD / khí phế thũng</span>
           </label>
         </div>
-      </div>
+      </section>
 
-      <!-- ====== SECTION 3: Symptoms ====== -->
-      <div class="section">
+      <!-- ====== STEP 3: Symptoms ====== -->
+      <section class="section">
         <div class="section-head">
           <div class="section-num">3</div>
           <div class="section-title">Triệu chứng<span class="opt">— tick nếu có</span></div>
         </div>
         <div class="symptoms">
           {% set syms = [
-            ("sym_hemoptysis","high","🩸 Ho ra máu","Red flag"),
+            ("sym_hemoptysis","high","Ho ra máu","Red flag"),
             ("sym_weight_loss","medium","Sụt cân không rõ nguyên nhân","Đáng kể"),
             ("sym_clubbing","medium","Ngón tay dùi trống","Đáng kể"),
             ("sym_hoarseness","medium","Khàn tiếng kéo dài","Đáng kể"),
             ("sym_cough","low","Ho mạn tính > 3 tuần","Nhẹ"),
             ("sym_chest_pain","low","Đau ngực","Nhẹ"),
-            ("sym_dyspnea","low","Khó thở mới / xấu đi","Nhẹ"),
+            ("sym_dyspnea","low","Khó thở mới hoặc xấu đi","Nhẹ"),
             ("sym_recurrent_infection","low","Nhiễm trùng ngực tái phát","Nhẹ"),
           ] %}
           {% for name, weight, label, tag in syms %}
           <label class="sym {{ weight }}">
             <input type="checkbox" name="{{ name }}">
-            <div class="sym-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="sym-box"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
             <div class="sym-body">
               <div class="sym-name">{{ label }}</div>
               <span class="sym-tag">{{ tag }}</span>
@@ -138,10 +146,12 @@
           </label>
           {% endfor %}
         </div>
-      </div>
+      </section>
 
-      <button type="submit" id="submit-btn" class="btn-lg">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      <button type="submit" id="submit-btn" class="btn-primary-lg">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z"/>
+        </svg>
         Phân tích bằng AI
       </button>
 
@@ -160,23 +170,23 @@
   <div class="card">
     <div class="card-head">
       <div class="card-title">Lịch sử phân tích</div>
-      <div class="hist-meta">{{cases|length}} ca</div>
+      <div class="h-meta">{{cases|length}} ca</div>
     </div>
     <ul class="history">
     {% for c in cases %}
       <li>
-        <a href="/case/{{c.id}}" class="hist-name">{{c.name}}</a>
-        <span class="hist-meta">{{c.n_nodules}} nodule · {{c.n_slices}} slice · {{c.ts}}</span>
+        <a href="/case/{{c.id}}" class="h-name">{{c.name}}</a>
+        <span class="h-meta">{{c.n_nodules}} nodule · {{c.n_slices}} slice · {{c.ts}}</span>
       </li>
     {% endfor %}
     </ul>
   </div>
   {% endif %}
 
-  <footer class="footer">
-    Đồ án LIDC-IDRI · UNet++ EfficientNet-B5 (seg) · DenseNet121-3D (malignancy) · Lungmask R231 · Brock NEJM 2013
+  <footer class="foot">
+    UNet++ EfficientNet-B5 · DenseNet121-3D · Lungmask R231 · Brock NEJM 2013 · Lung-RADS ACR v2022
   </footer>
-</div>
+</main>
 
 <script>
 const dirInput = document.getElementById("files-dir");
@@ -200,10 +210,10 @@ dirInput.addEventListener("change", updateSummary);
 zipInput.addEventListener("change", updateSummary);
 
 document.querySelectorAll(".chip input").forEach(inp => {
-  inp.addEventListener("change", () => inp.closest(".chip").classList.toggle("checked", inp.checked));
+  inp.addEventListener("change", () => inp.closest(".chip").classList.toggle("is-checked", inp.checked));
 });
 document.querySelectorAll(".sym input").forEach(inp => {
-  inp.addEventListener("change", () => inp.closest(".sym").classList.toggle("checked", inp.checked));
+  inp.addEventListener("change", () => inp.closest(".sym").classList.toggle("is-checked", inp.checked));
 });
 
 function setProgress(pct, msg) {
@@ -235,7 +245,7 @@ document.getElementById("upload-form").onsubmit = (e) => {
   });
 
   submitBtn.disabled = true;
-  progress.classList.add("show");
+  progress.classList.add("is-active");
   while (progLog.firstChild) progLog.removeChild(progLog.firstChild);
 
   const xhr = new XMLHttpRequest();
@@ -251,8 +261,7 @@ document.getElementById("upload-form").onsubmit = (e) => {
     if (xhr.status !== 200) {
       progText.textContent = "Lỗi upload: " + xhr.status;
       logLine(xhr.responseText, "err");
-      submitBtn.disabled = false;
-      return;
+      submitBtn.disabled = false; return;
     }
     const r = JSON.parse(xhr.responseText);
     logLine(`Upload xong (${r.n_dicoms} DICOM). Bắt đầu AI...`, "ok");
