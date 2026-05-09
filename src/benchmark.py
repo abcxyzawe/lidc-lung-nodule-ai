@@ -59,12 +59,13 @@ DEFAULT_PANEL = [
 ]
 
 
-def gt_nodules_for(h5_path: Path, voxel_sp: tuple, merge_dist_mm: float = 12.0) -> list:
+def gt_nodules_for(h5_path: Path, voxel_sp: tuple, merge_dist_mm: float = 12.0,
+                    min_consensus: int = 1) -> list:
     """Extract clinically-relevant GT nodules (polygon ≥ 3mm) from preprocessed h5.
 
-    Merges across radiologists by physical centroid distance.
-    Returns list of dict with: diam_mm, voxels, vol_mm3, centroid_zyx_voxel, n_radiologists,
-    malignancy_mean (or None).
+    Merges across radiologists by physical centroid distance, then keeps only
+    nodules confirmed by `min_consensus` radiologists (default 2/4 — standard
+    LIDC consensus threshold). 1/4 annotations are too unreliable for evaluation.
     """
     out = []
     with h5py.File(h5_path, "r") as f:
@@ -117,6 +118,8 @@ def gt_nodules_for(h5_path: Path, voxel_sp: tuple, merge_dist_mm: float = 12.0) 
                     if np.linalg.norm(ca - cb) <= merge_dist_mm:
                         cluster.append(m); used[j] = True
                 rads = sorted(set(c["rad"] for c in cluster))
+                if len(rads) < min_consensus:
+                    continue  # require multi-radiologist consensus
                 mals = [c["malignancy"] for c in cluster if c["malignancy"] is not None]
                 diams = [c["diam_mm"] for c in cluster]
                 out.append({

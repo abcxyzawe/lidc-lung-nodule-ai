@@ -420,6 +420,16 @@ def _elongation_ratio(coords: np.ndarray, voxel_sp: tuple) -> float:
     return float(np.sqrt(max(eigvals[0], 0) / max(eigvals[2], 1e-6)))
 
 
+def _bbox_extent(coords: np.ndarray) -> float:
+    """Volume / bounding-box volume. 1.0 = perfect cube fill,
+    sphere = ~0.524, vessel/strip = 0.1-0.3, irregular scar = 0.2-0.4.
+    """
+    bmin = coords.min(axis=0)
+    bmax = coords.max(axis=0) + 1
+    bbox_vol = float(np.prod(bmax - bmin))
+    return float(len(coords)) / max(bbox_vol, 1.0)
+
+
 def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
                  max_elongation: float = 4.0):
     """Connected components 3D + filter shape (vessels) + size.
@@ -437,7 +447,7 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
             continue
         elong = _elongation_ratio(coords, voxel_sp)
         if elong > max_elongation:
-            continue  # likely vessel / bronchus
+            continue
         c = coords.mean(0)
         bmin = coords.min(0)
         bmax = coords.max(0) + 1
