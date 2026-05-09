@@ -127,19 +127,33 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
                 pct = 25 + int(55 * i / max(total, 1))  # 25 -> 80 during AI
                 _emit(case_id, pct, f"AI đang infer slice {i+1}/{total}")
                 last_emit[0] = now
-        t0 = time.time(); _prob, pred = predict_nodules(vol, threshold=0.5, tta=True, progress=progress_cb); t["ai_predict"] = time.time() - t0
+        t0 = time.time(); _prob, pred = predict_nodules(vol, threshold=0.6, tta=True, progress=progress_cb); t["ai_predict"] = time.time() - t0
         _emit(case_id, 80, f"AI inference xong ({t['ai_predict']:.1f}s) — pred {int(pred.sum()):,} voxel")
 
         pred = (pred & lung).astype("uint8")
         _emit(case_id, 82, f"Lọc nodule trong phổi — còn {int(pred.sum()):,} voxel")
 
-        t0 = time.time(); nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=120); t["postprocess"] = time.time() - t0
-        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện (≥ ~5.7mm)")
+        t0 = time.time()
+        nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=200, max_elongation=4.0)
+        t["postprocess"] = time.time() - t0
+        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate (≥ 6.5mm, ratio ≤ 4)")
 
         t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
+        # Drop "ghost nodules": small + AI clearly benign (score 1-2) + low suspicion
+        before = len(nodules)
+        nodules = [
+            n for n in nodules
+            if not (
+                n["diameter_mm"] < 8
+                and n.get("ai_class", 3) <= 2
+                and float(n.get("ai_susp_prob", 0) or 0) < 0.15
+            )
+        ]
+        if before > len(nodules):
+            _emit(case_id, 88, f"Bỏ {before - len(nodules)} ghost nodule (AI confident-benign + nhỏ)")
         n_high = sum(1 for n in nodules if n.get("risk_combined") == "high")
         n_med = sum(1 for n in nodules if n.get("risk_combined") == "medium")
-        _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — {n_high} cao, {n_med} trung bình")
+        _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — còn {len(nodules)} nodule, {n_high} cao, {n_med} trung bình")
 
         # Brock per nodule + USPSTF + symptoms
         t0 = time.time()

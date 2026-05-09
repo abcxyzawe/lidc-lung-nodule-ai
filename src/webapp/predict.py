@@ -275,7 +275,34 @@ def predict_malignancy_for_nodules(volume_hu, nodules):
     return nodules
 
 
-def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS):
+def _elongation_ratio(coords: np.ndarray, voxel_sp: tuple) -> float:
+    """PCA-based elongation: sqrt(λ_max / λ_min) of physical-coord covariance.
+
+    Vessels and bronchi cut transversely give ratio > 4-5;
+    real lung nodules are roughly spherical, ratio < 3.
+    """
+    if len(coords) < 10:
+        return 1.0
+    physical = coords.astype(np.float32) * np.array(voxel_sp, dtype=np.float32)
+    centered = physical - physical.mean(axis=0)
+    cov = np.cov(centered.T)
+    try:
+        eigvals = np.sort(np.linalg.eigvalsh(cov))[::-1]
+    except np.linalg.LinAlgError:
+        return 1.0
+    if eigvals[2] < 1e-6:
+        return 99.0
+    return float(np.sqrt(max(eigvals[0], 0) / max(eigvals[2], 1e-6)))
+
+
+def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
+                 max_elongation: float = 4.0):
+    """Connected components 3D + filter shape (vessels) + size.
+
+    A blob is dropped if:
+      - voxels < min_voxels (too small / artifact), or
+      - elongation ratio > max_elongation (tubular = vessel/bronchus).
+    """
     structure = np.ones((3, 3, 3), dtype=np.uint8)
     lab, n = cc_label(mask_3d, structure=structure)
     out = []
@@ -283,6 +310,9 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS):
         coords = np.argwhere(lab == i)
         if len(coords) < min_voxels:
             continue
+        elong = _elongation_ratio(coords, voxel_sp)
+        if elong > max_elongation:
+            continue  # likely vessel / bronchus
         c = coords.mean(0)
         bmin = coords.min(0)
         bmax = coords.max(0) + 1
@@ -293,6 +323,7 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS):
             "voxels": int(len(coords)),
             "volume_mm3": vol_mm3,
             "diameter_mm": float(diam),
+            "elongation": float(elong),
             "centroid_zyx_voxel": [float(v) for v in c],
             "bbox_zyx_voxel": [int(v) for v in bmin] + [int(v) for v in bmax],
         })
