@@ -1,5 +1,7 @@
 # LIDC-IDRI Lung Nodule AI — End-to-End Pipeline + Webapp
 
+> 📘 **Tài liệu kỹ thuật chi tiết** (thuật toán, kiến trúc model, công thức Brock, etc.): xem [DOCUMENTATION.md](DOCUMENTATION.md)
+
 Đồ án phát hiện + phân loại nodule phổi từ ảnh CT (LIDC-IDRI dataset).
 
 **2 model AI hoạt động cùng nhau:**
