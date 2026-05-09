@@ -3,22 +3,16 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Trash2, Stethoscope } from "lucide-react";
 
 import { Topbar } from "@/components/topbar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Table, TableBody, TableCell, TableRow,
 } from "@/components/ui/table";
-import { VerdictBanner } from "@/components/verdict-banner";
-import { DiagnosisCard } from "@/components/diagnosis-card";
-import { PatientContextBar } from "@/components/patient-context-bar";
-import { NoduleSpotlight } from "@/components/nodule-spotlight";
 import { FindingsTable } from "@/components/findings-table";
 import { Plot3D } from "@/components/plot-3d";
-import { riskBadgeClass } from "@/lib/risk";
 import { cn } from "@/lib/utils";
 import { deleteCase, getCase } from "@/lib/api";
 import { toast } from "sonner";
@@ -56,38 +50,14 @@ export default function CasePage() {
   }
 
   const { meta, plot_html } = data;
-  const nHigh = meta.nodules.filter((n) => n.risk_combined === "high").length;
-  const nMed = meta.nodules.filter((n) => n.risk_combined === "medium").length;
-  const nLow = meta.nodules.filter((n) => n.risk_combined === "low").length;
-
-  const verdict: "low" | "medium" | "high" =
-    nHigh > 0 ? "high" : nMed > 0 ? "medium" : "low";
-
-  const verdictText = (() => {
-    if (nHigh > 0)
-      return {
-        title: "Nguy cơ CAO — cần khám chuyên khoa",
-        text: `${nHigh} nodule có nguy cơ cao. Khuyến nghị PET-CT hoặc sinh thiết theo Lung-RADS.`,
-      };
-    if (nMed > 0)
-      return {
-        title: "Cần theo dõi định kỳ",
-        text: `${nMed} nodule nguy cơ trung bình. Chụp lại CT phổi sau 3-6 tháng.`,
-      };
-    if (meta.n_nodules > 0)
-      return {
-        title: "Không phát hiện nodule đáng lo",
-        text: `Có ${nLow} nốt nhỏ < 6mm — Lung-RADS phân loại bỏ qua, không cần follow-up.`,
-      };
-    return {
-      title: "Phổi sạch",
-      text: "AI không tìm thấy nodule nào ≥ 4.5mm trong vùng phổi.",
-    };
-  })();
-
-  const indexNodule = [...meta.nodules].sort(
-    (a, b) => b.diameter_mm - a.diameter_mm
-  )[0];
+  const total = meta.n_nodules;
+  const nLR4 = meta.nodules.filter(n => {
+    const c = n.lung_rads?.category;
+    return c === "4A" || c === "4B" || c === "4X";
+  }).length;
+  const nLR3 = meta.nodules.filter(n => n.lung_rads?.category === "3").length;
+  const nLR2 = meta.nodules.filter(n => n.lung_rads?.category === "2").length;
+  const minutesSaved = Math.max(2, Math.round(meta.n_slices / 30));
 
   async function onDelete() {
     if (!confirm("Xoá case này?")) return;
@@ -113,64 +83,47 @@ export default function CasePage() {
 
         <header>
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{meta.name}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            AI hỗ trợ tầm soát · {total} candidate · ~{minutesSaved} phút tiết kiệm so với scroll thủ công
+          </p>
         </header>
 
-        {meta.clinical?.diagnosis ? (
-          <DiagnosisCard d={meta.clinical.diagnosis} />
-        ) : (
-          <VerdictBanner
-            verdict={verdict}
-            title={verdictText.title}
-            text={verdictText.text}
-          />
-        )}
+        {/* Detection summary banner */}
+        <div className={cn(
+          "flex items-start gap-4 rounded-xl border-l-4 p-5",
+          nLR4 > 0 ? "border-red-500 bg-red-50/60"
+          : nLR3 > 0 ? "border-amber-500 bg-amber-50/60"
+          : "border-emerald-500 bg-emerald-50/60"
+        )}>
+          <Stethoscope className={cn(
+            "mt-1 h-6 w-6 flex-shrink-0",
+            nLR4 > 0 ? "text-red-600" : nLR3 > 0 ? "text-amber-600" : "text-emerald-600"
+          )} />
+          <div className="flex-1">
+            <div className="text-lg font-bold">
+              {total === 0
+                ? "Không phát hiện nodule"
+                : `Phát hiện ${total} nodule cần bác sĩ review`}
+            </div>
+            <p className="mt-1 text-sm text-foreground/80">
+              {total === 0
+                ? "AI không tìm thấy nodule nào ≥ 6.5mm trong vùng phổi."
+                : <>
+                  <span className="font-mono font-semibold">{nLR4}</span> Lung-RADS 4 ·{" "}
+                  <span className="font-mono font-semibold">{nLR3}</span> Lung-RADS 3 ·{" "}
+                  <span className="font-mono font-semibold">{nLR2}</span> Lung-RADS 2 (bỏ qua).{" "}
+                  <strong>Bác sĩ confirm/reject từng nodule trong table.</strong>
+                </>
+              }
+            </p>
+          </div>
+        </div>
 
-        {meta.clinical && <PatientContextBar cli={meta.clinical} />}
-
-        {meta.clinical && meta.clinical.symptoms.count > 0 && (
-          <Card
-            className={cn(
-              "border-l-4",
-              meta.clinical.symptoms.level === "high" && "border-l-red-500",
-              meta.clinical.symptoms.level === "medium" && "border-l-amber-500",
-              meta.clinical.symptoms.level === "low" && "border-l-sky-500"
-            )}
-          >
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">
-                Triệu chứng ({meta.clinical.symptoms.count})
-              </CardTitle>
-              <Badge className={cn("font-bold uppercase", riskBadgeClass(meta.clinical.symptoms.level))}>
-                {meta.clinical.symptoms.level}
-              </Badge>
-            </CardHeader>
-            <CardContent>
-              <p className="mb-3 text-sm text-muted-foreground">
-                {meta.clinical.symptoms.message}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {meta.clinical.symptoms.active.map((s) => (
-                  <Badge
-                    key={s.key}
-                    variant="outline"
-                    className={cn("font-medium", riskBadgeClass(s.weight))}
-                  >
-                    {s.label}
-                  </Badge>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {indexNodule && <NoduleSpotlight n={indexNodule} />}
-
-        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5">
           <Stat label="slices CT" value={meta.n_slices} />
-          <Stat label="nodule" value={meta.n_nodules} />
-          <Stat label="low" value={nLow} color="emerald" />
-          <Stat label="medium" value={nMed} color="amber" />
-          <Stat label="high" value={nHigh} color="red" />
+          <Stat label="nodule" value={total} />
+          <Stat label="LR-4 (đáng nghi)" value={nLR4} color="red" />
+          <Stat label="LR-3 (theo dõi)" value={nLR3} color="amber" />
           <Stat label="AI infer" value={`${meta.timing_sec.ai_predict.toFixed(1)}s`} />
         </div>
 
@@ -178,7 +131,7 @@ export default function CasePage() {
           <CardHeader>
             <CardTitle className="text-base">3D phổi + nodule</CardTitle>
             <p className="text-sm text-muted-foreground">
-              Vỏ phổi xanh trong suốt + nodule màu đặc. Kéo chuột xoay, scroll zoom.
+              Vỏ phổi xanh trong suốt, nodule màu đặc. Click legend để bật/tắt từng cái.
             </p>
           </CardHeader>
           <CardContent>
@@ -190,19 +143,19 @@ export default function CasePage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
-                Tất cả nodule ({meta.nodules.length})
+                Danh sách nodule (sort theo confidence — cao nhất trước)
               </CardTitle>
               <p className="text-sm text-muted-foreground">
-                Sắp xếp theo kích thước. Index nodule có viền đỏ bên trái.
+                Click ảnh để xem slice phóng to. Mark <strong>Accept</strong> nếu là nodule thật,
+                <strong> Reject</strong> nếu là false positive.
               </p>
             </CardHeader>
             <CardContent>
-              <FindingsTable nodules={meta.nodules} />
+              <FindingsTable nodules={meta.nodules} caseId={id} />
               <p className="mt-4 text-sm text-muted-foreground">
-                <strong className="text-foreground">AI score 1-5</strong> — DenseNet121-3D phân loại malignancy ·
-                <strong className="ml-1 text-foreground">Brock 4-yr</strong> — xác suất ung thư 4 năm (McWilliams NEJM 2013) ·
-                <strong className="ml-1 text-foreground">Lung-RADS</strong> ACR v2022. Brock band: &lt;5% theo dõi
-                thường, 5-10% chụp lại 3 tháng, &gt;10% PET / sinh thiết.
+                <strong>Confidence:</strong> trung bình xác suất AI trong vùng nodule.
+                <strong> Lung-RADS:</strong> chuẩn ACR v2022 dựa trên đường kính (rule, không phải AI).
+                AI <strong>KHÔNG chẩn đoán ung thư</strong> — chỉ flag chỗ nghi để bác sĩ xem.
               </p>
             </CardContent>
           </Card>
@@ -220,12 +173,8 @@ export default function CasePage() {
                 <TechRow k="Voxel pred (∩ phổi)" v={meta.pred_voxels.toLocaleString()} />
                 <TechRow k="Đọc DICOM" v={`${meta.timing_sec.read_dicom.toFixed(2)} s`} />
                 <TechRow k="Lung segmentation" v={`${meta.timing_sec.lung_seg.toFixed(2)} s`} />
-                <TechRow k="Nodule segmentation (B5 + TTA)" v={`${meta.timing_sec.ai_predict.toFixed(2)} s`} />
-                <TechRow k="Connected components" v={`${meta.timing_sec.postprocess.toFixed(2)} s`} />
-                <TechRow k="Malignancy classifier" v={`${meta.timing_sec.malignancy.toFixed(2)} s`} />
-                {meta.timing_sec.clinical != null && (
-                  <TechRow k="Brock + USPSTF" v={`${meta.timing_sec.clinical.toFixed(2)} s`} />
-                )}
+                <TechRow k="Nodule segmentation (B5 + TTA + ensemble)" v={`${meta.timing_sec.ai_predict.toFixed(2)} s`} />
+                <TechRow k="Connected components + filters" v={`${meta.timing_sec.postprocess.toFixed(2)} s`} />
                 <TechRow k="Render Plotly Mesh3d" v={`${meta.timing_sec.render_3d.toFixed(2)} s`} />
               </TableBody>
             </Table>
@@ -236,7 +185,8 @@ export default function CasePage() {
         </Card>
 
         <footer className="pt-8 text-center text-xs text-muted-foreground">
-          Không thay thế chẩn đoán của bác sĩ · UNet++ B5 + DenseNet121-3D + Lungmask R231 + Brock 2013
+          AI hỗ trợ tầm soát — KHÔNG thay thế chẩn đoán bác sĩ ·
+          UNet++ B5 ensemble + Lungmask R231 · F1 detection 0.66 · Trained on LIDC-IDRI
         </footer>
       </main>
     </>
@@ -252,14 +202,14 @@ function Stat({
   value: string | number;
   color?: "emerald" | "amber" | "red";
 }) {
-  const colorClass = {
+  const cc = {
     emerald: "text-emerald-600",
     amber: "text-amber-600",
     red: "text-red-600",
   }[color ?? "emerald"];
   return (
     <div className="rounded-lg border bg-card p-4">
-      <div className={cn("font-mono text-2xl font-bold leading-tight tabular-nums", color && colorClass)}>
+      <div className={cn("font-mono text-2xl font-bold leading-tight tabular-nums", color && cc)}>
         {value}
       </div>
       <div className="mt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">

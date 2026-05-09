@@ -22,7 +22,7 @@ export function Topbar({ subtitle }: { subtitle?: string }) {
           <div className="leading-tight">
             <div className="text-[15px] font-bold tracking-tight">Nodura</div>
             <div className="text-[11px] text-muted-foreground">
-              {subtitle ?? "Soi rõ từng nốt, an tâm từng hơi thở"}
+              {subtitle ?? "AI hỗ trợ tầm soát nodule phổi"}
             </div>
           </div>
         </Link>

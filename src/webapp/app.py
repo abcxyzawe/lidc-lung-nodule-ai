@@ -32,14 +32,11 @@ from predict import (
     segment_lung,
 )
 from clinical import (
-    brock_band,
-    brock_probability,
     detect_nodule_type_from_hu,
-    diagnose,
     is_upper_lobe,
-    symptom_concern,
-    uspstf_eligible,
 )
+# lung_rads lives inside predict.py (was defined there for predict_malignancy_for_nodules)
+from predict import lung_rads
 
 
 WEBAPP_DIR = Path(__file__).resolve().parent
@@ -115,8 +112,7 @@ def _emit(case_id: str, pct: int, msg: str):
     print(f"[{case_id}] {pct}% {msg}", flush=True)
 
 
-def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
-                patient: dict):
+def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
     """Heavy synchronous work — runs in a thread to keep event loop free."""
     try:
         _emit(case_id, 5, f"Bắt đầu xử lý {len(dcm_paths)} file DICOM")
@@ -164,54 +160,28 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
         if before > len(nodules):
             _emit(case_id, 86, f"Bỏ {before - len(nodules)} subpleural FP")
 
-        t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
-        # Drop ghost nodules: small + AI clearly benign + low suspicion
-        before = len(nodules)
-        nodules = [
-            n for n in nodules
-            if not (
-                n["diameter_mm"] < 8
-                and n.get("ai_class", 3) <= 2
-                and float(n.get("ai_susp_prob", 0) or 0) < 0.15
-            )
-        ]
-        if before > len(nodules):
-            _emit(case_id, 88, f"Bỏ {before - len(nodules)} ghost nodule")
-        n_high = sum(1 for n in nodules if n.get("risk_combined") == "high")
-        n_med = sum(1 for n in nodules if n.get("risk_combined") == "medium")
-        _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — còn {len(nodules)} nodule ({n_high} cao, {n_med} TB)")
-
-        # Brock per nodule + USPSTF + symptoms
+        # Per-nodule descriptors: type, lobe location, Lung-RADS by size
         t0 = time.time()
         n_total = vol.shape[0]
-        # Brock paper assumes "nodule count" = real nodules in CT (typically 1-5).
-        # Our AI has ~5-15% precision, so raw count includes many FPs. Use the
-        # count of clinically-relevant nodules (>= 6mm OR AI suspicious) capped at 5.
-        relevant_count = max(1, min(5, sum(
-            1 for n in nodules
-            if n["diameter_mm"] >= 6.0
-            or float(n.get("ai_susp_prob", 0) or 0) >= 0.5
-        )))
         for n in nodules:
             n["nodule_type"] = detect_nodule_type_from_hu(vol, n["bbox_zyx_voxel"], labeled, n["id"])
             n["upper_lobe"] = is_upper_lobe(n["centroid_zyx_voxel"][0], n_total)
-            n["brock_prob"] = brock_probability(
-                age=patient["age"], sex=patient["sex"],
-                family_hx=patient["family_hx"], emphysema=patient["emphysema"],
-                size_mm=n["diameter_mm"], nodule_type=n["nodule_type"],
-                upper_lobe=n["upper_lobe"], count=relevant_count,
-                spiculated=False,
-            )
-            n["brock_band"] = brock_band(n["brock_prob"])
-        clinical = {
-            "patient": patient,
-            "uspstf": uspstf_eligible(patient["age"], patient["pack_years"],
-                                      patient["currently_smoking"], patient["years_since_quit"]),
-            "symptoms": symptom_concern(patient.get("symptoms", {})),
-        }
-        clinical["diagnosis"] = diagnose(nodules, clinical)
-        t["clinical"] = time.time() - t0
-        _emit(case_id, 94, f"Chẩn đoán: {clinical['diagnosis']['action_title']}")
+            n["lung_rads"] = lung_rads(n["diameter_mm"])
+            # Confidence = mean probability inside the core voxels (proxy for AI certainty)
+            zmin, ymin, xmin, zmax, ymax, xmax = n["bbox_zyx_voxel"]
+            blob_in_box = (labeled[zmin:zmax, ymin:ymax, xmin:xmax] == n["id"])
+            prob_in_box = prob_vol[zmin:zmax, ymin:ymax, xmin:xmax]
+            if blob_in_box.any():
+                n["confidence"] = float(prob_in_box[blob_in_box].mean())
+            else:
+                n["confidence"] = 0.0
+        # Sort by confidence (highest first) — radiologist reviews top suspects first
+        nodules.sort(key=lambda n: -n["confidence"])
+        # Renumber so #1 is most confident
+        for new_id, n in enumerate(nodules, 1):
+            n["id"] = new_id
+        t["postprocess_extra"] = time.time() - t0
+        _emit(case_id, 92, f"Sort theo confidence — #1 cao nhất {nodules[0]['confidence']*100:.0f}% nếu có" if nodules else "Không có nodule")
 
         t0 = time.time()
         html_3d = render_3d_html(
@@ -244,7 +214,6 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
             "lung_voxels": int(lung.sum()),
             "pred_voxels": int(pred.sum()),
             "nodules": nodules,
-            "clinical": clinical,
             "timing_sec": {k: float(v) for k, v in t.items()},
         }
         (case_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -258,24 +227,7 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
 
 
 @app.post("/api/analyze")
-async def analyze(
-    files: list[UploadFile] = File(...),
-    age: int = Form(60),
-    sex: str = Form("male"),
-    pack_years: float = Form(0),
-    currently_smoking: bool = Form(False),
-    years_since_quit: int = Form(0),
-    family_hx: bool = Form(False),
-    emphysema: bool = Form(False),
-    sym_hemoptysis: bool = Form(False),
-    sym_weight_loss: bool = Form(False),
-    sym_clubbing: bool = Form(False),
-    sym_hoarseness: bool = Form(False),
-    sym_cough: bool = Form(False),
-    sym_chest_pain: bool = Form(False),
-    sym_dyspnea: bool = Form(False),
-    sym_recurrent_infection: bool = Form(False),
-):
+async def analyze(files: list[UploadFile] = File(...)):
     """Save upload, schedule analysis in a thread, return case_id immediately."""
     case_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     work = UPLOADS_DIR / case_id
@@ -306,22 +258,8 @@ async def analyze(
         shutil.rmtree(work, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Không tìm thấy file DICOM trong upload.")
 
-    patient = {
-        "age": int(age), "sex": sex,
-        "pack_years": float(pack_years),
-        "currently_smoking": bool(currently_smoking),
-        "years_since_quit": int(years_since_quit),
-        "family_hx": bool(family_hx), "emphysema": bool(emphysema),
-        "symptoms": {
-            "hemoptysis": sym_hemoptysis, "weight_loss": sym_weight_loss,
-            "clubbing": sym_clubbing, "hoarseness": sym_hoarseness,
-            "cough": sym_cough, "chest_pain": sym_chest_pain,
-            "dyspnea": sym_dyspnea, "recurrent_infection": sym_recurrent_infection,
-        },
-    }
-
     _emit(case_id, 1, f"Upload xong ({len(dcm_paths)} file). Đang chờ AI...")
-    asyncio.create_task(asyncio.to_thread(_do_analyze, work, dcm_paths, case_id, case_label, patient))
+    asyncio.create_task(asyncio.to_thread(_do_analyze, work, dcm_paths, case_id, case_label))
     return JSONResponse({"case_id": case_id, "name": case_label, "n_dicoms": len(dcm_paths)})
 
 

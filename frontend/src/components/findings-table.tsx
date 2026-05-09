@@ -1,4 +1,8 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
@@ -9,38 +13,61 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { Nodule } from "@/lib/types";
-import { riskBadgeClass, rowTintClass } from "@/lib/risk";
 import { NoduleThumb } from "@/components/nodule-thumb";
+import { Check, X } from "lucide-react";
 
-export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
-  const sorted = [...nodules].sort((a, b) => b.diameter_mm - a.diameter_mm);
+type Verdict = "accepted" | "rejected" | undefined;
+
+function lungRadsClass(category?: string): string {
+  if (!category) return "";
+  if (category === "2") return "bg-emerald-100 text-emerald-700";
+  if (category === "3") return "bg-amber-100 text-amber-700";
+  return "bg-red-100 text-red-700"; // 4A/4B/4X
+}
+
+export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: string }) {
+  const [verdicts, setVerdicts] = useState<Record<number, Verdict>>({});
+  const storageKey = `nodule-verdicts:${caseId}`;
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (raw) setVerdicts(JSON.parse(raw));
+    } catch {}
+  }, [storageKey]);
+
+  function setVerdict(id: number, v: Verdict) {
+    setVerdicts((prev) => {
+      const next = { ...prev, [id]: v };
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
 
   return (
     <div className="overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>#</TableHead>
+            <TableHead className="w-12">#</TableHead>
             <TableHead>Slice</TableHead>
             <TableHead>Đường kính</TableHead>
             <TableHead>Loại</TableHead>
             <TableHead>Vị trí</TableHead>
             <TableHead>Lung-RADS</TableHead>
-            <TableHead>AI</TableHead>
-            <TableHead>P(susp)</TableHead>
-            <TableHead>Brock 4-yr</TableHead>
-            <TableHead>Tổng</TableHead>
+            <TableHead>Confidence</TableHead>
+            <TableHead>Review</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {sorted.map((n, i) => {
-            const risk = n.risk_combined ?? "low";
+          {nodules.map((n) => {
+            const v = verdicts[n.id];
             return (
               <TableRow
                 key={n.id}
                 className={cn(
-                  rowTintClass(risk),
-                  i === 0 && "border-l-[3px] border-l-red-500"
+                  v === "accepted" && "bg-emerald-50/60",
+                  v === "rejected" && "bg-muted/40 opacity-60"
                 )}
               >
                 <TableCell className="font-mono font-bold tabular-nums">{n.id}</TableCell>
@@ -52,6 +79,11 @@ export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
                     {n.diameter_mm.toFixed(1)}
                   </span>{" "}
                   mm
+                  {n.diameter_full_mm && Math.abs(n.diameter_full_mm - n.diameter_mm) > 1 && (
+                    <span className="ml-1 text-[10px] text-muted-foreground">
+                      (mask {n.diameter_full_mm.toFixed(1)}mm)
+                    </span>
+                  )}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {n.nodule_type ?? "solid"}
@@ -62,7 +94,7 @@ export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
                 <TableCell>
                   {n.lung_rads ? (
                     <>
-                      <Badge variant="secondary" className="font-mono text-[10px]">
+                      <Badge className={cn("font-mono text-[10px]", lungRadsClass(n.lung_rads.category))}>
                         LR {n.lung_rads.category}
                       </Badge>
                       <span className="mt-0.5 block text-[11px] text-muted-foreground">
@@ -74,33 +106,52 @@ export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
                   )}
                 </TableCell>
                 <TableCell>
-                  {n.ai_class != null ? (
-                    <>
-                      <span className="font-mono font-bold tabular-nums">{n.ai_class}/5</span>
-                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                        EV {n.ai_expected?.toFixed(2)}
+                  {n.confidence != null ? (
+                    <div className="flex items-center gap-2">
+                      <div className="h-2 w-16 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={cn(
+                            "h-full",
+                            n.confidence >= 0.85 ? "bg-emerald-500"
+                            : n.confidence >= 0.7 ? "bg-amber-500"
+                            : "bg-red-400"
+                          )}
+                          style={{ width: `${n.confidence * 100}%` }}
+                        />
+                      </div>
+                      <span className="font-mono text-xs tabular-nums">
+                        {(n.confidence * 100).toFixed(0)}%
                       </span>
-                    </>
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
-                <TableCell className="font-mono tabular-nums">
-                  {n.ai_susp_prob != null ? `${(n.ai_susp_prob * 100).toFixed(0)}%` : "—"}
+                    </div>
+                  ) : "—"}
                 </TableCell>
                 <TableCell>
-                  {n.brock_prob != null && n.brock_band ? (
-                    <Badge className={cn("font-mono", riskBadgeClass(n.brock_band))}>
-                      {(n.brock_prob * 100).toFixed(1)}%
-                    </Badge>
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Badge className={cn("font-bold uppercase", riskBadgeClass(risk))}>
-                    {risk}
-                  </Badge>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant={v === "accepted" ? "default" : "outline"}
+                      className={cn(
+                        "h-7 px-2",
+                        v === "accepted" && "bg-emerald-600 hover:bg-emerald-700"
+                      )}
+                      onClick={() => setVerdict(n.id, v === "accepted" ? undefined : "accepted")}
+                      title="Confirm là nodule thật"
+                    >
+                      <Check className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={v === "rejected" ? "default" : "outline"}
+                      className={cn(
+                        "h-7 px-2",
+                        v === "rejected" && "bg-red-600 hover:bg-red-700"
+                      )}
+                      onClick={() => setVerdict(n.id, v === "rejected" ? undefined : "rejected")}
+                      title="Reject là false positive"
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             );
