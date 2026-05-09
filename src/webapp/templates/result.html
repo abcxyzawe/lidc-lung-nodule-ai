@@ -12,10 +12,26 @@
   <h1>{{meta.name}}</h1>
   <p class="subtitle">Phân tích lúc {{meta.timestamp}}</p>
 
+  {% set n_high = meta.nodules|selectattr('risk_combined','equalto','high')|list|length %}
+  {% set n_med  = meta.nodules|selectattr('risk_combined','equalto','medium')|list|length %}
+  {% set n_low  = meta.nodules|selectattr('risk_combined','equalto','low')|list|length %}
+
+  {% if n_high > 0 %}
+    <div class="banner banner-high">⚠️ <strong>{{n_high}} nodule nguy cơ CAO</strong> — cần khám bác sĩ</div>
+  {% elif n_med > 0 %}
+    <div class="banner banner-medium">⚠ <strong>{{n_med}} nodule cần theo dõi</strong> — không cấp tính nhưng nên chụp lại 3-6 tháng</div>
+  {% elif meta.n_nodules > 0 %}
+    <div class="banner banner-low">✅ <strong>Không phát hiện nodule đáng lo</strong> — chỉ có {{n_low}} nốt nhỏ &lt; 6mm (Lung-RADS bỏ qua)</div>
+  {% else %}
+    <div class="banner banner-low">✅ <strong>Phổi sạch</strong> — AI không tìm thấy nodule nào ≥ 4.5mm</div>
+  {% endif %}
+
   <div class="stats">
     <div class="stat"><span class="big">{{meta.n_slices}}</span><span class="lbl">slices CT</span></div>
     <div class="stat"><span class="big">{{meta.n_nodules}}</span><span class="lbl">nodule phát hiện</span></div>
-    <div class="stat"><span class="big">{{meta.lung_voxels|int}}</span><span class="lbl">voxel phổi</span></div>
+    <div class="stat"><span class="big risk-low">{{n_low}}</span><span class="lbl">low (bỏ qua)</span></div>
+    <div class="stat"><span class="big risk-medium">{{n_med}}</span><span class="lbl">medium (theo dõi)</span></div>
+    <div class="stat"><span class="big risk-high">{{n_high}}</span><span class="lbl">high (đáng lo)</span></div>
     <div class="stat"><span class="big">{{ "%.1f"|format(meta.timing_sec.ai_predict) }}s</span><span class="lbl">AI inference</span></div>
   </div>
 
@@ -44,26 +60,30 @@
       </thead>
       <tbody>
       {% for n in meta.nodules %}
-        <tr class="risk-row risk-row-{{ n.risk_combined or 'low' }}">
+        {% set lr = n.get('lung_rads') %}
+        {% set risk = n.get('risk_combined', 'low') %}
+        <tr class="risk-row risk-row-{{ risk }}">
           <td>{{ n.id }}</td>
           <td>{{ "%.1f"|format(n.diameter_mm) }} mm</td>
           <td>{{ "%.0f"|format(n.volume_mm3) }} mm³</td>
           <td>
-            <strong>LR {{ n.lung_rads.category }}</strong>
-            <small class="dim">{{ n.lung_rads.label }}</small>
+            {% if lr %}
+              <strong>LR {{ lr.category }}</strong>
+              <small class="dim">{{ lr.label }}</small>
+            {% else %}<small class="dim">—</small>{% endif %}
           </td>
           <td>
-            {% if n.ai_class is defined %}
+            {% if n.get('ai_class') %}
               <strong>{{ n.ai_class }}</strong>
               <small class="dim">(EV {{ "%.2f"|format(n.ai_expected) }})</small>
             {% else %}<small class="dim">—</small>{% endif %}
           </td>
           <td>
-            {% if n.ai_susp_prob is defined %}
+            {% if n.get('ai_susp_prob') is not none %}
               {{ "%.0f"|format(n.ai_susp_prob * 100) }}%
             {% else %}<small class="dim">—</small>{% endif %}
           </td>
-          <td><span class="risk-pill risk-{{ n.risk_combined or 'low' }}">{{ n.risk_combined or 'low' }}</span></td>
+          <td><span class="risk-pill risk-{{ risk }}">{{ risk }}</span></td>
         </tr>
       {% endfor %}
       </tbody>

@@ -147,6 +147,22 @@ th { background: #222732; color: #b0b3c0; font-weight: 600; }
 
 small.dim { display: block; color: #8a8d99; font-size: 0.85em; }
 
+/* Top-of-page banner */
+.banner {
+  padding: 14px 20px;
+  border-radius: 10px;
+  margin: 16px 0;
+  font-size: 1em;
+  border-left: 4px solid;
+}
+.banner-high   { background: rgba(255, 80, 80, 0.10); border-color: #ff6b6b; color: #ff8080; }
+.banner-medium { background: rgba(255, 209, 102, 0.08); border-color: #ffd166; color: #ffe28a; }
+.banner-low    { background: rgba(143, 255, 161, 0.06); border-color: #8fffa1; color: #a8ffb4; }
+
+.big.risk-low    { color: #8fffa1 !important; }
+.big.risk-medium { color: #ffd166 !important; }
+.big.risk-high   { color: #ff8080 !important; }
+
 footer {
   margin-top: 40px;
   padding-top: 20px;
