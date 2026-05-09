@@ -51,6 +51,10 @@ export function UploadForm() {
   const [files, setFiles] = useState<FileList | null>(null);
   const [fileLabel, setFileLabel] = useState("");
 
+  const [cigsPerDay, setCigsPerDay] = useState(0);
+  const [yearsSmoked, setYearsSmoked] = useState(0);
+  const packYears = (cigsPerDay / 20) * yearsSmoked;
+
   const [patient, setPatient] = useState<PatientForm>({
     age: 60,
     sex: "male",
@@ -95,8 +99,11 @@ export function UploadForm() {
     setProgress(0);
     setProgressText("Đang upload…");
 
+    // Compose final patient form: derive pack_years from the user-friendly inputs
+    const submitPatient: PatientForm = { ...patient, pack_years: Number(packYears.toFixed(2)) };
+
     try {
-      const r = await uploadAndAnalyze(files, patient, (loaded, total) => {
+      const r = await uploadAndAnalyze(files, submitPatient, (loaded, total) => {
         const upPct = (loaded / total) * 100;
         setProgress(Math.round(upPct * 0.3));
         setProgressText(`Upload ${(loaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`);
@@ -224,25 +231,42 @@ export function UploadForm() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Hút thuốc (gói × năm)">
+              <Field label="Số điếu/ngày">
                 <Input
-                  type="number"
-                  min={0}
-                  max={120}
-                  step={0.5}
-                  value={patient.pack_years}
-                  onChange={(e) => setField("pack_years", Number(e.target.value))}
+                  type="number" min={0} max={80} step={1}
+                  value={cigsPerDay}
+                  onChange={(e) => setCigsPerDay(Number(e.target.value))}
                 />
               </Field>
-              <Field label="Số năm đã bỏ">
+              <Field label="Số năm hút">
                 <Input
-                  type="number"
-                  min={0}
-                  max={80}
+                  type="number" min={0} max={80} step={1}
+                  value={yearsSmoked}
+                  onChange={(e) => setYearsSmoked(Number(e.target.value))}
+                />
+              </Field>
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="Số năm đã bỏ (nếu đã bỏ)">
+                <Input
+                  type="number" min={0} max={80}
                   value={patient.years_since_quit}
                   onChange={(e) => setField("years_since_quit", Number(e.target.value))}
                 />
               </Field>
+              <div className="flex items-end">
+                <div className="w-full rounded-md border border-dashed bg-muted/40 px-3 py-2 text-sm">
+                  <span className="text-muted-foreground">Tổng phơi nhiễm: </span>
+                  <span className="font-mono font-bold tabular-nums">{packYears.toFixed(1)}</span>
+                  <span className="text-muted-foreground"> gói-năm</span>
+                  {packYears >= 20 && (
+                    <span className="ml-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-700">
+                      ≥ 20 (đủ tầm soát)
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
               <ChipCheckbox
