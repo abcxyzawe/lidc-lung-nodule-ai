@@ -19,6 +19,7 @@ from scipy.ndimage import (
     distance_transform_edt,
 )
 from skimage import measure
+from PIL import Image, ImageDraw
 import plotly.graph_objects as go
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -39,14 +40,16 @@ _MAL_PATCH = 32
 def get_model(ckpt_path: Path = None):
     global _MODEL
     if _MODEL is None:
-        ckpt_path = ckpt_path or (RUNS_DIR / "best.pt")
+        # Switched to last.pt (E200) per user request — testing late-epoch model
+        ckpt_path = ckpt_path or (RUNS_DIR / "last.pt")
         ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
         encoder = ck.get("encoder", "efficientnet-b5")
         m = make_model(encoder=encoder, pretrained=None).to(DEVICE)
         m.load_state_dict(ck["model"])
         m.train(False)
         _MODEL = m
-        print(f"Seg model loaded ({encoder}) on {DEVICE}, ckpt={ckpt_path.name}")
+        print(f"Seg model loaded ({encoder}) on {DEVICE}, ckpt={ckpt_path.name} "
+              f"(epoch {ck.get('epoch','?')}, val_dice {ck.get('val_dice','?')})")
     return _MODEL
 
 
@@ -286,6 +289,46 @@ def merge_nearby_nodules(nodules: list, voxel_sp: tuple, max_dist_mm: float = 8.
             a2["merged_from"] = [c["id"] for c in cluster]
             merged.append(a2)
     return merged
+
+
+def render_nodule_thumb(volume_hu: np.ndarray, nodule: dict, out_path: Path,
+                        size: int = 280, hu_window=(-1000, 200)) -> None:
+    """Save a thumbnail PNG of the centroid axial slice with red bounding box.
+
+    Crops a ~160-pixel ROI around the nodule, normalises to lung window,
+    converts to RGB, draws the bbox in red, saves PNG.
+    """
+    H, W = volume_hu.shape[1], volume_hu.shape[2]
+    cz, cy, cx = [int(round(c)) for c in nodule["centroid_zyx_voxel"]]
+    cz = max(0, min(volume_hu.shape[0] - 1, cz))
+    zmin, ymin, xmin, zmax, ymax, xmax = nodule["bbox_zyx_voxel"]
+
+    # Crop a 160×160 ROI centered on the bbox
+    crop_h = max(160, (ymax - ymin) + 60)
+    crop_w = max(160, (xmax - xmin) + 60)
+    cy_mid = (ymin + ymax) // 2
+    cx_mid = (xmin + xmax) // 2
+    y0 = max(0, cy_mid - crop_h // 2); y1 = min(H, y0 + crop_h)
+    x0 = max(0, cx_mid - crop_w // 2); x1 = min(W, x0 + crop_w)
+    if y1 == H: y0 = max(0, H - crop_h)
+    if x1 == W: x0 = max(0, W - crop_w)
+
+    sl = volume_hu[cz, y0:y1, x0:x1].astype(np.float32)
+    img = np.clip(sl, hu_window[0], hu_window[1])
+    img = ((img - hu_window[0]) / (hu_window[1] - hu_window[0]) * 255).astype(np.uint8)
+    pim = Image.fromarray(img, mode="L").convert("RGB").resize((size, size))
+
+    # Draw bbox
+    sx = size / (x1 - x0); sy = size / (y1 - y0)
+    bx0 = (xmin - x0) * sx; by0 = (ymin - y0) * sy
+    bx1 = (xmax - x0) * sx; by1 = (ymax - y0) * sy
+    draw = ImageDraw.Draw(pim)
+    draw.rectangle([bx0, by0, bx1, by1], outline=(255, 64, 64), width=3)
+    # Slice number text (lower-right)
+    draw.text((size - 60, size - 18), f"z={cz}", fill=(255, 255, 255))
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pim.save(out_path, format="PNG", optimize=True)
 
 
 def filter_subpleural(nodules: list, lung_mask: np.ndarray, voxel_sp: tuple,

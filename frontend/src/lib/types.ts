@@ -27,6 +27,7 @@ export interface Nodule {
   upper_lobe?: boolean;
   brock_prob?: number;
   brock_band?: BrockBand;
+  thumb_url?: string;
 }
 
 export interface Patient {

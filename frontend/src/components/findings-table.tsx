@@ -10,6 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Nodule } from "@/lib/types";
 import { riskBadgeClass, rowTintClass } from "@/lib/risk";
+import { API_URL } from "@/lib/api";
 
 export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
   const sorted = [...nodules].sort((a, b) => b.diameter_mm - a.diameter_mm);
@@ -20,6 +21,7 @@ export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
         <TableHeader>
           <TableRow>
             <TableHead>#</TableHead>
+            <TableHead>Slice</TableHead>
             <TableHead>Đường kính</TableHead>
             <TableHead>Loại</TableHead>
             <TableHead>Vị trí</TableHead>
@@ -42,6 +44,17 @@ export function FindingsTable({ nodules }: { nodules: Nodule[] }) {
                 )}
               >
                 <TableCell className="font-mono font-bold tabular-nums">{n.id}</TableCell>
+                <TableCell>
+                  {n.thumb_url ? (
+                    <img
+                      src={`${API_URL}${n.thumb_url}`}
+                      alt={`Nodule ${n.id}`}
+                      className="h-20 w-20 rounded border object-cover"
+                    />
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
                 <TableCell>
                   <span className="font-mono font-bold tabular-nums">
                     {n.diameter_mm.toFixed(1)}

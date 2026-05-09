@@ -28,6 +28,7 @@ from predict import (
     predict_nodules,
     read_dicom_series,
     render_3d_html,
+    render_nodule_thumb,
     segment_lung,
 )
 from clinical import (
@@ -71,6 +72,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Serve generated PNG thumbnails (and any other case files) at /results-files/<id>/...
+from fastapi.staticfiles import StaticFiles
+app.mount("/results-files", StaticFiles(directory=RESULTS_DIR), name="results-files")
 
 
 def _list_cases():
@@ -219,6 +223,17 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
         case_dir = RESULTS_DIR / case_id
         case_dir.mkdir(exist_ok=True)
         (case_dir / "3d.html").write_text(html_3d, encoding="utf-8")
+
+        # Render bbox thumbnails
+        thumbs_dir = case_dir / "thumbs"
+        for n in nodules:
+            try:
+                fname = f"nodule_{n['id']:04d}.png"
+                render_nodule_thumb(vol, n, thumbs_dir / fname)
+                n["thumb_url"] = f"/results-files/{case_id}/thumbs/{fname}"
+            except Exception as e:
+                print(f"  thumb gen failed for #{n['id']}: {e}", flush=True)
+        _emit(case_id, 99, f"Render {len(nodules)} thumbnail")
         meta = {
             "id": case_id, "name": case_label or case_id,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
