@@ -413,11 +413,26 @@ def predict_malignancy_for_nodules(volume_hu, nodules):
             cls = int(p.argmax()) + 1
             expected = float(sum((k + 1) * p[k] for k in range(len(p))))
             susp = float(p[3] + p[4]) if len(p) >= 5 else 0.0
-            ai_risk = "high" if susp >= 0.5 else ("medium" if susp >= 0.25 else "low")
+            # Size-based prior (Lung-RADS aligned, 1-5 scale)
+            d = n["diameter_mm"]
+            if d >= 30: size_prior = 5
+            elif d >= 15: size_prior = 4
+            elif d >= 8: size_prior = 3
+            elif d >= 6: size_prior = 2
+            else: size_prior = 1
+            # Combined: 60% size, 40% AI (classifier bal_acc only 0.46 — trust size more)
+            combined_class = round(0.6 * size_prior + 0.4 * cls)
+            combined_expected = 0.6 * size_prior + 0.4 * expected
+            # Recompute suspicious prob with size influence
+            size_susp = max(0, (d - 6) / 14)  # 0 at 6mm, 1 at 20mm
+            combined_susp = 0.5 * susp + 0.5 * min(size_susp, 1.0)
+            ai_risk = "high" if combined_susp >= 0.5 else ("medium" if combined_susp >= 0.25 else "low")
             n.update({
-                "ai_class": cls,
-                "ai_expected": expected,
-                "ai_susp_prob": susp,
+                "ai_class": combined_class,
+                "ai_class_raw": cls,
+                "ai_expected": combined_expected,
+                "ai_susp_prob": combined_susp,
+                "ai_susp_prob_raw": susp,
                 "ai_risk_label": ai_risk,
             })
         size = lung_rads(n["diameter_mm"])
@@ -473,13 +488,34 @@ def _bbox_extent(coords: np.ndarray) -> float:
     return float(len(coords)) / max(bbox_vol, 1.0)
 
 
-def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
-                 max_elongation: float = 4.0):
-    """Connected components 3D + filter shape (vessels) + size.
+def _long_axis_diameter_mm(coords: np.ndarray, voxel_sp: tuple) -> float:
+    """Long-axis diameter via PCA — closer to clinical measurement than
+    equivalent-sphere diameter."""
+    if len(coords) < 4:
+        return 0.0
+    physical = coords.astype(np.float32) * np.array(voxel_sp, dtype=np.float32)
+    centered = physical - physical.mean(axis=0)
+    cov = np.cov(centered.T)
+    try:
+        eigvals = np.sort(np.linalg.eigvalsh(cov))[::-1]
+    except np.linalg.LinAlgError:
+        return 0.0
+    # 4σ ≈ length covering 95% of points along principal axis
+    return float(4 * np.sqrt(max(eigvals[0], 0)))
 
-    A blob is dropped if:
-      - voxels < min_voxels (too small / artifact), or
-      - elongation ratio > max_elongation (tubular = vessel/bronchus).
+
+def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
+                 max_elongation: float = 4.0,
+                 prob_volume: np.ndarray = None,
+                 core_threshold: float = 0.85):
+    """Connected components 3D + filter shape + tight-diameter measurement.
+
+    A blob is dropped if voxels < min_voxels or elongation > max_elongation.
+
+    If prob_volume is given, also computes:
+      - core_mask: voxels where prob > core_threshold AND inside this blob
+      - diameter_mm uses core_mask (tighter, closer to GT)
+      - keeps full mask diameter as diameter_full_mm for comparison
     """
     structure = np.ones((3, 3, 3), dtype=np.uint8)
     lab, n = cc_label(mask_3d, structure=structure)
@@ -491,16 +527,40 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
         elong = _elongation_ratio(coords, voxel_sp)
         if elong > max_elongation:
             continue
+
         c = coords.mean(0)
         bmin = coords.min(0)
         bmax = coords.max(0) + 1
-        vol_mm3 = float(len(coords)) * float(np.prod(voxel_sp))
-        diam = 2 * (3 * vol_mm3 / (4 * np.pi)) ** (1 / 3)
+        vol_full = float(len(coords)) * float(np.prod(voxel_sp))
+        diam_full = 2 * (3 * vol_full / (4 * np.pi)) ** (1 / 3)
+
+        # Tight measurement using prob > core_threshold within this blob
+        if prob_volume is not None:
+            blob_mask = (lab == i)
+            core = blob_mask & (prob_volume > core_threshold)
+            core_coords = np.argwhere(core)
+            if len(core_coords) >= 8:
+                vol_core = float(len(core_coords)) * float(np.prod(voxel_sp))
+                # Use long-axis (clinical) diameter from core
+                long_axis = _long_axis_diameter_mm(core_coords, voxel_sp)
+                # Equivalent sphere as fallback
+                diam_core_sphere = 2 * (3 * vol_core / (4 * np.pi)) ** (1 / 3)
+                # Take the LARGER of core long-axis and core sphere
+                # (avoids underestimating very compact nodules)
+                diam = max(long_axis, diam_core_sphere)
+            else:
+                diam = diam_full * 0.7  # fallback shrink heuristic
+        else:
+            diam = diam_full
+
+        vol_mm3 = (4 / 3) * np.pi * (diam / 2) ** 3
+
         out.append({
             "id": int(i),
             "voxels": int(len(coords)),
-            "volume_mm3": vol_mm3,
+            "volume_mm3": float(vol_mm3),
             "diameter_mm": float(diam),
+            "diameter_full_mm": float(diam_full),
             "elongation": float(elong),
             "centroid_zyx_voxel": [float(v) for v in c],
             "bbox_zyx_voxel": [int(v) for v in bmin] + [int(v) for v in bmax],
