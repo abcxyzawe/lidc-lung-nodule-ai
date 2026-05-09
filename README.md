@@ -23,15 +23,18 @@ Kết hợp với **Lung-RADS heuristic** theo đường kính → đánh giá n
 
 ### Bước cài
 ```bash
-git clone <repo-url>
-cd phan-tich-ung-thu
+git clone https://github.com/abcxyzawe/lidc-lung-nodule-ai.git
+cd lidc-lung-nodule-ai
 
 # 1. PyTorch — cài đúng version cho CUDA của bạn
 # CUDA 12.4 (khuyến nghị):
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
 
-# 2. Còn lại
+# 2. Backend deps
 pip install -r requirements.txt
+
+# 3. Frontend deps (Next.js — Node.js >= 20)
+cd frontend && npm install && cd ..
 ```
 
 ### Lấy dataset
@@ -47,15 +50,30 @@ pip install -r requirements.txt
 
 ### Lấy checkpoint đã train sẵn (BẮT BUỘC cho webapp)
 
-Checkpoint không trong git (~400 MB). Tải từ GitHub Release v1.1:
+Checkpoint không trong git (~400 MB). Repo public nên tải trực tiếp được, không cần `gh` hay token.
 
+**Bash / Git Bash / macOS / Linux:**
 ```bash
-mkdir -p work/runs
-gh release download v1.1 -R abcxyzawe/lidc-lung-nodule-ai -D work/runs/
+mkdir -p work/runs && cd work/runs
+BASE=https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/download/v1.1
+curl -LO $BASE/best.pt
+curl -LO $BASE/malignancy.pt
+curl -LO $BASE/test_metrics.json
+curl -LO $BASE/malignancy_metrics.json
+cd ../..
 ```
 
-Hoặc tải tay từ: https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/tag/v1.1
-→ đặt `best.pt` (segmentation) và `malignancy.pt` (classifier) vào `work/runs/`.
+**PowerShell (Windows):**
+```powershell
+mkdir work\runs -Force; cd work\runs
+$BASE = "https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/download/v1.1"
+"best.pt","malignancy.pt","test_metrics.json","malignancy_metrics.json" |
+  ForEach-Object { Invoke-WebRequest "$BASE/$_" -OutFile $_ }
+cd ..\..
+```
+
+**Hoặc tải tay từ browser:** https://github.com/abcxyzawe/lidc-lung-nodule-ai/releases/tag/v1.1
+→ click từng file, đặt vào `work/runs/`. Tối thiểu cần `best.pt` + `malignancy.pt`.
 
 ### Lấy DICOM (chỉ cần nếu muốn chạy lại pipeline)
 
@@ -100,11 +118,22 @@ phan-tich-ung-thu/
 
 ## 3. Chạy webapp (cách nhanh nhất để demo)
 
+Webapp = backend FastAPI (Python) + frontend Next.js (TypeScript). Mở 2 terminal:
+
+**Terminal 1 — Backend (Python, port 8081):**
 ```bash
 cd src/webapp
 python app.py
-# Mở browser: http://127.0.0.1:8081
 ```
+
+**Terminal 2 — Frontend (Next.js, port 3000):**
+```bash
+cd frontend
+npm install     # chỉ lần đầu
+npm run dev
+```
+
+Mở browser: **http://localhost:3000**
 
 **Cách dùng:**
 1. Click **"📁 Chọn folder DICOM"** → chọn folder của 1 bệnh nhân (ví dụ `manifest-1600709154662/LIDC-IDRI/LIDC-IDRI-0001/.../...`).
