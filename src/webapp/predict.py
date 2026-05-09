@@ -15,6 +15,8 @@ from scipy.ndimage import (
     label as cc_label,
     binary_closing,
     binary_fill_holes,
+    binary_erosion,
+    distance_transform_edt,
 )
 from skimage import measure
 import plotly.graph_objects as go
@@ -27,6 +29,7 @@ make_model = import_module("05_train").make_model
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _MODEL = None
+_MODEL_SWA = None
 _MALIGNANCY_MODEL = None
 _LUNG_INFERER = None
 _MAL_HU = (-1024.0, 600.0)
@@ -45,6 +48,26 @@ def get_model(ckpt_path: Path = None):
         _MODEL = m
         print(f"Seg model loaded ({encoder}) on {DEVICE}, ckpt={ckpt_path.name}")
     return _MODEL
+
+
+def get_swa_model():
+    """Lazy-load SWA segmentation model for ensemble. Returns None if missing."""
+    global _MODEL_SWA
+    if _MODEL_SWA is False:
+        return None
+    if _MODEL_SWA is None:
+        swa_path = RUNS_DIR / "swa.pt"
+        if not swa_path.exists():
+            _MODEL_SWA = False
+            return None
+        ck = torch.load(swa_path, map_location=DEVICE, weights_only=False)
+        encoder = ck.get("encoder", "efficientnet-b5")
+        m = make_model(encoder=encoder, pretrained=None).to(DEVICE)
+        m.load_state_dict(ck["model"])
+        m.train(False)
+        _MODEL_SWA = m
+        print(f"SWA seg model loaded for ensemble.")
+    return _MODEL_SWA
 
 
 def get_malignancy_model(ckpt_path: Path = None):
@@ -157,34 +180,136 @@ def segment_lung(volume_hu):
         return keep.astype(np.uint8)
 
 
-def predict_nodules(volume_hu, threshold=0.5, tta=True, progress=None):
-    """Run model slice-by-slice with optional TTA. Returns (prob, mask)."""
-    model = get_model()
+def _infer_slice(models: list, x: torch.Tensor, tta: bool) -> torch.Tensor:
+    """Average sigmoid probabilities across models × TTA augmentations."""
+    probs = []
+    for m in models:
+        p1 = torch.sigmoid(m(x))
+        if tta:
+            p2 = torch.sigmoid(m(torch.flip(x, dims=[-1]))).flip(dims=[-1])
+            p3 = torch.sigmoid(m(torch.flip(x, dims=[-2]))).flip(dims=[-2])
+            p4 = torch.sigmoid(m(torch.flip(x, dims=[-1, -2]))).flip(dims=[-1, -2])
+            probs.append((p1 + p2 + p3 + p4) / 4)
+        else:
+            probs.append(p1)
+    return torch.stack(probs, 0).mean(0)
+
+
+def predict_nodules(volume_hu, threshold=0.5, tta=True, ensemble=True, progress=None):
+    """Run segmentation slice-by-slice with TTA + optional ensemble.
+
+    ensemble=True: average best.pt + swa.pt (if available) for stability.
+    """
+    models = [get_model()]
+    if ensemble:
+        swa = get_swa_model()
+        if swa is not None:
+            models.append(swa)
     N, H, W = volume_hu.shape
     prob = np.zeros((N, H, W), dtype=np.float32)
     with torch.no_grad():
         for i in range(N):
-            ip = max(0, i - 1)
-            ine = min(N - 1, i + 1)
+            ip = max(0, i - 1); ine = min(N - 1, i + 1)
             stk = np.stack(
                 [normalize(volume_hu[ip]), normalize(volume_hu[i]), normalize(volume_hu[ine])],
                 axis=0,
             )
             x = torch.from_numpy(stk).unsqueeze(0).float().to(DEVICE)
             with torch.amp.autocast("cuda", enabled=DEVICE.type == "cuda"):
-                p1 = torch.sigmoid(model(x))
-                if tta:
-                    p2 = torch.sigmoid(model(torch.flip(x, dims=[-1]))).flip(dims=[-1])
-                    p3 = torch.sigmoid(model(torch.flip(x, dims=[-2]))).flip(dims=[-2])
-                    p4 = torch.sigmoid(model(torch.flip(x, dims=[-1, -2]))).flip(dims=[-1, -2])
-                    p = (p1 + p2 + p3 + p4) / 4
-                else:
-                    p = p1
+                p = _infer_slice(models, x, tta)
             prob[i] = p[0, 0].float().cpu().numpy()
             if progress and i % 4 == 0:
                 progress(i, N)
     mask = (prob > threshold).astype(np.uint8)
     return prob, mask
+
+
+def clean_mask(mask_3d: np.ndarray, voxel_sp: tuple) -> np.ndarray:
+    """Morphological cleanup of binary mask before connected components.
+
+    1. closing (dilate then erode) → bridge small gaps from adjacent slices
+       (same nodule split into 2 blobs by 1-voxel discontinuity)
+    2. opening (erode then dilate) → remove single-voxel noise specks
+    """
+    # Closing radius 1 in xy + small in z (z spacing usually larger)
+    structure_close = np.ones((1, 3, 3), dtype=np.uint8)
+    closed = binary_closing(mask_3d.astype(bool), structure=structure_close, iterations=1)
+    # Opening radius 1 → drops isolated <2 voxel artifacts
+    structure_open = np.ones((1, 3, 3), dtype=np.uint8)
+    opened = binary_erosion(closed, structure=structure_open, iterations=1)
+    # Dilate back to recover boundary
+    from scipy.ndimage import binary_dilation
+    cleaned = binary_dilation(opened, structure=structure_open, iterations=1)
+    return cleaned.astype(np.uint8)
+
+
+def merge_nearby_nodules(nodules: list, voxel_sp: tuple, max_dist_mm: float = 8.0) -> list:
+    """Merge nodules whose physical centroids are within max_dist_mm.
+
+    Same physical nodule can split into 2 blobs because of slice discontinuity.
+    Merged keeps the larger blob's stats, sums voxel count, expands bbox.
+    """
+    if len(nodules) < 2:
+        return nodules
+    nodules = sorted(nodules, key=lambda n: -n["volume_mm3"])
+    used = [False] * len(nodules)
+    merged = []
+    for i, a in enumerate(nodules):
+        if used[i]:
+            continue
+        used[i] = True
+        cluster = [a]
+        ca = np.array(a["centroid_zyx_voxel"]) * np.array(voxel_sp)
+        for j in range(i + 1, len(nodules)):
+            if used[j]:
+                continue
+            b = nodules[j]
+            cb = np.array(b["centroid_zyx_voxel"]) * np.array(voxel_sp)
+            if np.linalg.norm(ca - cb) <= max_dist_mm:
+                cluster.append(b)
+                used[j] = True
+        if len(cluster) == 1:
+            merged.append(a)
+        else:
+            # Merge: sum voxels, expand bbox, recompute diameter
+            total_vox = sum(c["voxels"] for c in cluster)
+            total_vol = sum(c["volume_mm3"] for c in cluster)
+            new_diam = 2 * (3 * total_vol / (4 * np.pi)) ** (1 / 3)
+            bbs = [c["bbox_zyx_voxel"] for c in cluster]
+            bbox_min = [min(bb[k] for bb in bbs) for k in range(3)]
+            bbox_max = [max(bb[k] for bb in bbs) for k in range(3, 6)]
+            a2 = dict(a)
+            a2["voxels"] = total_vox
+            a2["volume_mm3"] = total_vol
+            a2["diameter_mm"] = float(new_diam)
+            a2["bbox_zyx_voxel"] = bbox_min + bbox_max
+            a2["merged_from"] = [c["id"] for c in cluster]
+            merged.append(a2)
+    return merged
+
+
+def filter_subpleural(nodules: list, lung_mask: np.ndarray, voxel_sp: tuple,
+                      min_dist_mm: float = 1.5) -> list:
+    """Drop nodules whose centroid is too close to lung pleural surface.
+
+    Subpleural blobs are often FP artifacts at the lung-chest-wall interface.
+    Real pleural nodules exist but require special workup; for screening AI
+    we conservatively drop them. Set min_dist_mm=0 to disable.
+    """
+    if min_dist_mm <= 0 or len(nodules) == 0:
+        return nodules
+    # Distance transform: for each lung voxel, distance to nearest non-lung voxel
+    sampling = list(voxel_sp)  # (z, y, x) mm
+    dist = distance_transform_edt(lung_mask, sampling=sampling)
+    kept = []
+    for n in nodules:
+        z, y, x = [int(round(c)) for c in n["centroid_zyx_voxel"]]
+        z = max(0, min(dist.shape[0] - 1, z))
+        y = max(0, min(dist.shape[1] - 1, y))
+        x = max(0, min(dist.shape[2] - 1, x))
+        if dist[z, y, x] >= min_dist_mm:
+            kept.append(n)
+    return kept
 
 
 def lung_rads(diameter_mm: float) -> dict:

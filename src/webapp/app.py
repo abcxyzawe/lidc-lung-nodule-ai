@@ -17,9 +17,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from predict import (
+    clean_mask,
+    filter_subpleural,
     find_nodules,
     get_malignancy_model,
     get_model,
+    get_swa_model,
+    merge_nearby_nodules,
     predict_malignancy_for_nodules,
     predict_nodules,
     read_dicom_series,
@@ -48,8 +52,8 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 async def lifespan(_app: FastAPI):
     print("Warming up models on GPU...")
     get_model()
+    get_swa_model()        # ensemble — best.pt + swa.pt
     get_malignancy_model()
-    # Warm lung segmentation model too
     from predict import _get_lung_inferer
     try:
         _get_lung_inferer()
@@ -127,16 +131,35 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
                 pct = 25 + int(55 * i / max(total, 1))  # 25 -> 80 during AI
                 _emit(case_id, pct, f"AI đang infer slice {i+1}/{total}")
                 last_emit[0] = now
-        t0 = time.time(); _prob, pred = predict_nodules(vol, threshold=0.6, tta=True, progress=progress_cb); t["ai_predict"] = time.time() - t0
-        _emit(case_id, 80, f"AI inference xong ({t['ai_predict']:.1f}s) — pred {int(pred.sum()):,} voxel")
+        t0 = time.time()
+        _prob, pred = predict_nodules(vol, threshold=0.65, tta=True, ensemble=True,
+                                      progress=progress_cb)
+        t["ai_predict"] = time.time() - t0
+        _emit(case_id, 80, f"AI inference xong ({t['ai_predict']:.1f}s, ensemble best+swa) — pred {int(pred.sum()):,} voxel")
 
         pred = (pred & lung).astype("uint8")
-        _emit(case_id, 82, f"Lọc nodule trong phổi — còn {int(pred.sum()):,} voxel")
+        _emit(case_id, 81, f"Lọc trong phổi — {int(pred.sum()):,} voxel")
+
+        # Morphological cleanup: bridge gaps + drop noise specks
+        pred = clean_mask(pred, voxel_sp)
+        _emit(case_id, 82, f"Clean mask (closing + opening) — {int(pred.sum()):,} voxel")
 
         t0 = time.time()
         nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=200, max_elongation=4.0)
         t["postprocess"] = time.time() - t0
-        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate (≥ 6.5mm, ratio ≤ 4)")
+        _emit(case_id, 84, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate (≥ 6.5mm, elong ≤ 4)")
+
+        # Merge nodules whose centroids are within 8mm physical distance
+        before = len(nodules)
+        nodules = merge_nearby_nodules(nodules, voxel_sp, max_dist_mm=10.0)
+        if before > len(nodules):
+            _emit(case_id, 85, f"Merge {before - len(nodules)} nodule trùng vùng (cùng tổn thương vật lý)")
+
+        # Drop subpleural blobs (often FP at lung-wall interface)
+        before = len(nodules)
+        nodules = filter_subpleural(nodules, lung, voxel_sp, min_dist_mm=2.0)
+        if before > len(nodules):
+            _emit(case_id, 86, f"Bỏ {before - len(nodules)} subpleural FP")
 
         t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
         # Drop "ghost nodules": small + AI clearly benign (score 1-2) + low suspicion
