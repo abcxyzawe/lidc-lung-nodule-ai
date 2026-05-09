@@ -12,7 +12,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,6 +26,14 @@ from predict import (
     read_dicom_series,
     render_3d_html,
     segment_lung,
+)
+from clinical import (
+    brock_band,
+    brock_probability,
+    detect_nodule_type_from_hu,
+    is_upper_lobe,
+    symptom_concern,
+    uspstf_eligible,
 )
 
 
@@ -92,7 +100,8 @@ def _emit(case_id: str, pct: int, msg: str):
     print(f"[{case_id}] {pct}% {msg}", flush=True)
 
 
-def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
+def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
+                patient: dict):
     """Heavy synchronous work — runs in a thread to keep event loop free."""
     try:
         _emit(case_id, 5, f"Bắt đầu xử lý {len(dcm_paths)} file DICOM")
@@ -125,6 +134,29 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
         n_med = sum(1 for n in nodules if n.get("risk_combined") == "medium")
         _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — {n_high} cao, {n_med} trung bình")
 
+        # Brock per nodule + USPSTF + symptoms
+        t0 = time.time()
+        n_total = vol.shape[0]
+        for n in nodules:
+            n["nodule_type"] = detect_nodule_type_from_hu(vol, n["bbox_zyx_voxel"], labeled, n["id"])
+            n["upper_lobe"] = is_upper_lobe(n["centroid_zyx_voxel"][0], n_total)
+            n["brock_prob"] = brock_probability(
+                age=patient["age"], sex=patient["sex"],
+                family_hx=patient["family_hx"], emphysema=patient["emphysema"],
+                size_mm=n["diameter_mm"], nodule_type=n["nodule_type"],
+                upper_lobe=n["upper_lobe"], count=len(nodules),
+                spiculated=False,
+            )
+            n["brock_band"] = brock_band(n["brock_prob"])
+        clinical = {
+            "patient": patient,
+            "uspstf": uspstf_eligible(patient["age"], patient["pack_years"],
+                                      patient["currently_smoking"], patient["years_since_quit"]),
+            "symptoms": symptom_concern(patient.get("symptoms", {})),
+        }
+        t["clinical"] = time.time() - t0
+        _emit(case_id, 94, f"Tính Brock + USPSTF + symptoms ({t['clinical']:.2f}s)")
+
         t0 = time.time()
         html_3d = render_3d_html(
             lung, pred, voxel_sp, labeled, nodules,
@@ -145,6 +177,7 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
             "lung_voxels": int(lung.sum()),
             "pred_voxels": int(pred.sum()),
             "nodules": nodules,
+            "clinical": clinical,
             "timing_sec": {k: float(v) for k, v in t.items()},
         }
         (case_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -158,7 +191,24 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
 
 
 @app.post("/analyze")
-async def analyze(files: list[UploadFile] = File(...)):
+async def analyze(
+    files: list[UploadFile] = File(...),
+    age: int = Form(60),
+    sex: str = Form("male"),
+    pack_years: float = Form(0),
+    currently_smoking: bool = Form(False),
+    years_since_quit: int = Form(0),
+    family_hx: bool = Form(False),
+    emphysema: bool = Form(False),
+    sym_hemoptysis: bool = Form(False),
+    sym_weight_loss: bool = Form(False),
+    sym_clubbing: bool = Form(False),
+    sym_hoarseness: bool = Form(False),
+    sym_cough: bool = Form(False),
+    sym_chest_pain: bool = Form(False),
+    sym_dyspnea: bool = Form(False),
+    sym_recurrent_infection: bool = Form(False),
+):
     """Save upload, schedule analysis in a thread, return case_id immediately."""
     case_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     work = UPLOADS_DIR / case_id
@@ -189,10 +239,22 @@ async def analyze(files: list[UploadFile] = File(...)):
         shutil.rmtree(work, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Không tìm thấy file DICOM trong upload.")
 
+    patient = {
+        "age": int(age), "sex": sex,
+        "pack_years": float(pack_years),
+        "currently_smoking": bool(currently_smoking),
+        "years_since_quit": int(years_since_quit),
+        "family_hx": bool(family_hx), "emphysema": bool(emphysema),
+        "symptoms": {
+            "hemoptysis": sym_hemoptysis, "weight_loss": sym_weight_loss,
+            "clubbing": sym_clubbing, "hoarseness": sym_hoarseness,
+            "cough": sym_cough, "chest_pain": sym_chest_pain,
+            "dyspnea": sym_dyspnea, "recurrent_infection": sym_recurrent_infection,
+        },
+    }
+
     _emit(case_id, 1, f"Upload xong ({len(dcm_paths)} file). Đang chờ AI...")
-    # Run in background — fire-and-forget. We respond immediately so the browser
-    # can subscribe to /events/{case_id} for live progress.
-    asyncio.create_task(asyncio.to_thread(_do_analyze, work, dcm_paths, case_id, case_label))
+    asyncio.create_task(asyncio.to_thread(_do_analyze, work, dcm_paths, case_id, case_label, patient))
     return JSONResponse({"case_id": case_id, "name": case_label, "n_dicoms": len(dcm_paths)})
 
 

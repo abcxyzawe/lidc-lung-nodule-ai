@@ -26,6 +26,33 @@
     <div class="banner banner-low">✅ <strong>Phổi sạch</strong> — AI không tìm thấy nodule nào ≥ 4.5mm</div>
   {% endif %}
 
+  {% if meta.clinical %}
+    {% set cli = meta.clinical %}
+    {% set p = cli.patient %}
+    <div class="card">
+      <h2>Đánh giá lâm sàng</h2>
+      <div class="banner {{ 'banner-high' if cli.uspstf.eligible else 'banner-low' }}">
+        <strong>USPSTF screening:</strong> {{ cli.uspstf.message }}
+      </div>
+      {% if cli.symptoms.count > 0 %}
+        <div class="banner banner-{{ cli.symptoms.level }}">
+          <strong>Triệu chứng ({{cli.symptoms.count}}):</strong> {{ cli.symptoms.message }}
+          <ul style="margin: 6px 0 0 20px; font-size: 0.9em;">
+            {% for s in cli.symptoms.active %}
+              <li>{{ s.label }} <span class="brock-pill brock-{{s.weight if s.weight!='medium' else 'medium'}}">{{ s.weight }}</span></li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+      <p class="hint">
+        Bệnh nhân: {{ p.age }} tuổi, {{ "Nam" if p.sex == "male" else "Nữ" }},
+        {{ p.pack_years }} gói-năm{% if p.currently_smoking %} (đang hút){% elif p.years_since_quit %} (bỏ {{p.years_since_quit}} năm){% endif %},
+        {% if p.family_hx %}có{% else %}không{% endif %} tiền sử gia đình,
+        {% if p.emphysema %}có{% else %}không{% endif %} COPD.
+      </p>
+    </div>
+  {% endif %}
+
   <div class="stats">
     <div class="stat"><span class="big">{{meta.n_slices}}</span><span class="lbl">slices CT</span></div>
     <div class="stat"><span class="big">{{meta.n_nodules}}</span><span class="lbl">nodule phát hiện</span></div>
@@ -53,9 +80,9 @@
     <table>
       <thead>
         <tr>
-          <th>#</th><th>Đường kính</th><th>Volume</th>
-          <th>Lung-RADS</th><th>AI score (1-5)</th><th>P(suspicious)</th>
-          <th>Đánh giá tổng</th>
+          <th>#</th><th>Đường kính</th><th>Loại</th><th>Vị trí</th>
+          <th>Lung-RADS</th><th>AI score</th><th>P(susp)</th>
+          <th>Brock 4-yr</th><th>Tổng</th>
         </tr>
       </thead>
       <tbody>
@@ -65,7 +92,8 @@
         <tr class="risk-row risk-row-{{ risk }}">
           <td>{{ n.id }}</td>
           <td>{{ "%.1f"|format(n.diameter_mm) }} mm</td>
-          <td>{{ "%.0f"|format(n.volume_mm3) }} mm³</td>
+          <td><small class="dim">{{ n.get('nodule_type', 'solid') }}</small></td>
+          <td><small class="dim">{{ "thuỳ trên" if n.get('upper_lobe') else "thuỳ dưới" }}</small></td>
           <td>
             {% if lr %}
               <strong>LR {{ lr.category }}</strong>
@@ -75,12 +103,16 @@
           <td>
             {% if n.get('ai_class') %}
               <strong>{{ n.ai_class }}</strong>
-              <small class="dim">(EV {{ "%.2f"|format(n.ai_expected) }})</small>
+              <small class="dim">EV {{ "%.2f"|format(n.ai_expected) }}</small>
             {% else %}<small class="dim">—</small>{% endif %}
           </td>
           <td>
-            {% if n.get('ai_susp_prob') is not none %}
-              {{ "%.0f"|format(n.ai_susp_prob * 100) }}%
+            {% if n.get('ai_susp_prob') is not none %}{{ "%.0f"|format(n.ai_susp_prob * 100) }}%
+            {% else %}<small class="dim">—</small>{% endif %}
+          </td>
+          <td>
+            {% if n.get('brock_prob') is not none %}
+              <span class="brock-pill brock-{{ n.brock_band }}">{{ "%.1f"|format(n.brock_prob * 100) }}%</span>
             {% else %}<small class="dim">—</small>{% endif %}
           </td>
           <td><span class="risk-pill risk-{{ risk }}">{{ risk }}</span></td>
@@ -90,8 +122,12 @@
     </table>
     <p class="hint">
       <strong>AI score:</strong> 1 = lành tính · 5 = ác tính (4-5 = suspicious).
-      <strong>EV (expected value)</strong> = giá trị kỳ vọng theo phân bố softmax.
-      <strong>Lung-RADS</strong> theo đường kính (heuristic, không thay thế bác sĩ).
+      <strong>EV</strong> = giá trị kỳ vọng theo softmax.
+      <strong>Lung-RADS</strong> theo đường kính (chuẩn ACR v2022).
+      <strong>Brock 4-yr</strong> = xác suất nodule là ung thư trong 4 năm (McWilliams NEJM 2013).
+      <span class="brock-pill brock-low">&lt;5%</span> theo dõi thường,
+      <span class="brock-pill brock-medium">5-10%</span> chụp lại 3 tháng,
+      <span class="brock-pill brock-high">&gt;10%</span> PET/sinh thiết.
     </p>
   </div>
   {% else %}

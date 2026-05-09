@@ -163,6 +163,26 @@ small.dim { display: block; color: #8a8d99; font-size: 0.85em; }
 .big.risk-medium { color: #ffd166 !important; }
 .big.risk-high   { color: #ff8080 !important; }
 
+/* Patient form */
+.form-section { color: #4ab5ff; margin: 20px 0 10px; font-size: 1em; font-weight: 600; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.form-grid label, .checks label { display: block; color: #ccc; font-size: 0.9em; }
+.form-grid input, .form-grid select {
+  width: 100%; padding: 8px; background: #0f1117; color: #fff;
+  border: 1px solid #333; border-radius: 6px; margin-top: 4px;
+}
+.checks { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0; }
+.checks label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+
+/* Brock badges */
+.brock-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.8em; font-weight: 700;
+}
+.brock-low    { background: #1e4d2b; color: #8fffa1; }
+.brock-medium { background: #4d3a1e; color: #ffd166; }
+.brock-high   { background: #4d1e1e; color: #ff8080; }
+
 footer {
   margin-top: 40px;
   padding-top: 20px;
