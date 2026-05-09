@@ -159,3 +159,160 @@ def is_upper_lobe(centroid_z: float, total_slices: int) -> bool:
     higher z = more cranial = upper lobe.
     """
     return (centroid_z / max(total_slices, 1)) > 0.5
+
+
+# ---------- Final diagnosis & recommendation engine ----------
+
+def diagnose(nodules: list, clinical: dict) -> dict:
+    """Generate a rich, actionable clinical assessment from per-nodule + patient data.
+
+    Combines size, Lung-RADS, AI malignancy probability, Brock 4-yr probability,
+    patient risk factors, and symptom red flags into a single recommendation.
+
+    Returns dict with:
+        summary           one-line description ("3 nốt can thiệp, 2 nốt theo dõi")
+        action            concrete recommendation text
+        action_band       "urgent" | "soon" | "routine" | "none"
+        action_title      short label used in banner ("Khám trong 2 tuần")
+        nodule_buckets    {"actionable": int, "monitor": int, "incidental": int}
+        risk_factors      list of {factor, weight}
+        max_brock_pct     float (highest Brock % across all nodules)
+        max_diameter_mm   float
+        index_nodule_id   int | None
+        index_reason      text explaining why the index nodule matters
+    """
+    p = (clinical or {}).get("patient", {}) or {}
+    sym = (clinical or {}).get("symptoms", {}) or {}
+    uspstf = (clinical or {}).get("uspstf", {}) or {}
+
+    # ---- Bucket nodules clinically ----
+    actionable, monitor, incidental = [], [], []
+    for n in nodules:
+        d = float(n.get("diameter_mm", 0))
+        b = float(n.get("brock_prob", 0) or 0)
+        lr = (n.get("lung_rads") or {}).get("category", "")
+        if d >= 8 or b >= 0.10 or lr in ("4B", "4X"):
+            actionable.append(n)
+        elif d >= 6 or b >= 0.05:
+            monitor.append(n)
+        else:
+            incidental.append(n)
+
+    max_brock = max((float(n.get("brock_prob", 0) or 0) for n in nodules), default=0.0)
+    max_diam = max((float(n.get("diameter_mm", 0)) for n in nodules), default=0.0)
+    has_red_flag = sym.get("level") == "high"
+
+    # ---- Risk factors ----
+    risk_factors = []
+    age = int(p.get("age", 0))
+    py = float(p.get("pack_years", 0) or 0)
+    if age >= 65:
+        risk_factors.append({"factor": f"Tuổi {age} (>65)", "weight": "medium"})
+    elif age >= 55:
+        risk_factors.append({"factor": f"Tuổi {age} (>55)", "weight": "low"})
+    if py >= 30:
+        risk_factors.append({"factor": f"{py:.0f} gói-năm (>30)", "weight": "high"})
+    elif py >= 20:
+        risk_factors.append({"factor": f"{py:.0f} gói-năm (>20)", "weight": "medium"})
+    elif py >= 10:
+        risk_factors.append({"factor": f"{py:.0f} gói-năm", "weight": "low"})
+    if p.get("currently_smoking"):
+        risk_factors.append({"factor": "Đang hút thuốc", "weight": "high"})
+    if p.get("family_hx"):
+        risk_factors.append({"factor": "Tiền sử gia đình ung thư phổi", "weight": "medium"})
+    if p.get("emphysema"):
+        risk_factors.append({"factor": "COPD / khí phế thũng", "weight": "medium"})
+    if has_red_flag:
+        risk_factors.append({"factor": "Triệu chứng red-flag (ho ra máu)", "weight": "high"})
+    elif sym.get("level") == "medium":
+        risk_factors.append({"factor": f"{sym.get('count', 0)} triệu chứng đáng kể", "weight": "medium"})
+
+    # ---- Recommendation ----
+    if has_red_flag and len(actionable) > 0:
+        band = "urgent"
+        title = "Khám chuyên khoa TRONG 2 TUẦN"
+        action = ("Bệnh nhân có triệu chứng red-flag (ho ra máu) cộng với "
+                  f"{len(actionable)} nodule đáng can thiệp. Theo NICE NG12, "
+                  "chỉ định khám chuyên khoa hô hấp/lồng ngực urgent trong 2 tuần.")
+    elif max_diam >= 30 or max_brock >= 0.30:
+        band = "urgent"
+        title = "PET-CT + xem xét sinh thiết"
+        action = (f"Có nodule đường kính {max_diam:.1f}mm hoặc Brock 4-yr "
+                  f"{max_brock*100:.1f}% — khả năng ác tính cao. "
+                  "Chỉ định PET-CT hoặc sinh thiết transthoracic.")
+    elif max_diam >= 15 or max_brock >= 0.10:
+        band = "soon"
+        title = "PET-CT + chụp lại 3 tháng"
+        action = (f"Nodule lớn nhất {max_diam:.1f}mm (Brock {max_brock*100:.1f}%). "
+                  "Xem xét PET-CT, theo dõi CT phổi sau 3 tháng. "
+                  "Tăng kích thước >1.5mm trong 3 tháng = đáng nghi ung thư.")
+    elif max_diam >= 8 or max_brock >= 0.05:
+        band = "soon"
+        title = "Chụp lại CT phổi sau 3 tháng"
+        action = (f"Nodule {max_diam:.1f}mm cần theo dõi tăng kích thước. "
+                  "CT phổi liều thấp sau 3 tháng. "
+                  "Brock 4-yr ở mức trung bình ({:.1f}%).".format(max_brock*100))
+    elif max_diam >= 6:
+        band = "routine"
+        title = "Chụp lại CT sau 6-12 tháng"
+        action = ("Nodule 6-8mm theo Lung-RADS 3 — cần theo dõi định kỳ. "
+                  "Chụp CT phổi liều thấp sau 6-12 tháng.")
+    elif len(nodules) > 0:
+        band = "none"
+        title = "Không cần follow-up"
+        action = (f"Phát hiện {len(nodules)} nodule nhỏ (<6mm). "
+                  "Lung-RADS phân loại bỏ qua — không cần can thiệp hay theo dõi đặc biệt.")
+    else:
+        band = "none"
+        title = "Phổi sạch"
+        action = "AI không tìm thấy nodule nào ≥ 4.5mm trong phổi."
+
+    if uspstf.get("eligible"):
+        action += " Bệnh nhân đủ điều kiện tầm soát ung thư phổi LDCT hằng năm theo USPSTF."
+
+    # ---- Summary ----
+    parts = []
+    if actionable: parts.append(f"{len(actionable)} nốt cần can thiệp")
+    if monitor:    parts.append(f"{len(monitor)} nốt theo dõi")
+    if incidental: parts.append(f"{len(incidental)} nốt nhỏ (bỏ qua)")
+    summary = ", ".join(parts) if parts else "Không phát hiện nodule"
+
+    # ---- Index nodule (highest concern) ----
+    if nodules:
+        # Score each by combined risk: prefer high diameter + high Brock
+        def score(n):
+            return float(n.get("diameter_mm", 0)) + float(n.get("brock_prob", 0) or 0) * 100
+        idx = max(nodules, key=score)
+        reasons = [f"đường kính {idx['diameter_mm']:.1f}mm"]
+        bp = float(idx.get("brock_prob", 0) or 0)
+        if bp >= 0.05:
+            reasons.append(f"Brock {bp*100:.1f}%")
+        sp = float(idx.get("ai_susp_prob", 0) or 0)
+        if sp >= 0.5:
+            reasons.append(f"AI nghi ngờ {sp*100:.0f}%")
+        if idx.get("upper_lobe"):
+            reasons.append("ở thuỳ trên (vùng nguy cơ ung thư cao)")
+        if (idx.get("nodule_type") or "solid") != "solid":
+            reasons.append(f"loại {idx['nodule_type']}")
+        index_reason = " · ".join(reasons)
+        index_id = int(idx["id"])
+    else:
+        index_id = None
+        index_reason = ""
+
+    return {
+        "summary": summary,
+        "action": action,
+        "action_band": band,
+        "action_title": title,
+        "nodule_buckets": {
+            "actionable": len(actionable),
+            "monitor": len(monitor),
+            "incidental": len(incidental),
+        },
+        "risk_factors": risk_factors,
+        "max_brock_pct": round(max_brock * 100, 2),
+        "max_diameter_mm": round(max_diam, 1),
+        "index_nodule_id": index_id,
+        "index_reason": index_reason,
+    }

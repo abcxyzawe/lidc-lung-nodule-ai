@@ -13,6 +13,7 @@ import {
   Table, TableBody, TableCell, TableRow,
 } from "@/components/ui/table";
 import { VerdictBanner } from "@/components/verdict-banner";
+import { DiagnosisCard } from "@/components/diagnosis-card";
 import { PatientContextBar } from "@/components/patient-context-bar";
 import { NoduleSpotlight } from "@/components/nodule-spotlight";
 import { FindingsTable } from "@/components/findings-table";
@@ -114,11 +115,15 @@ export default function CasePage() {
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{meta.name}</h1>
         </header>
 
-        <VerdictBanner
-          verdict={verdict}
-          title={verdictText.title}
-          text={verdictText.text}
-        />
+        {meta.clinical?.diagnosis ? (
+          <DiagnosisCard d={meta.clinical.diagnosis} />
+        ) : (
+          <VerdictBanner
+            verdict={verdict}
+            title={verdictText.title}
+            text={verdictText.text}
+          />
+        )}
 
         {meta.clinical && <PatientContextBar cli={meta.clinical} />}
 

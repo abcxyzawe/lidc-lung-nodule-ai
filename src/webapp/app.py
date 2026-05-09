@@ -30,6 +30,7 @@ from clinical import (
     brock_band,
     brock_probability,
     detect_nodule_type_from_hu,
+    diagnose,
     is_upper_lobe,
     symptom_concern,
     uspstf_eligible,
@@ -160,8 +161,9 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
                                       patient["currently_smoking"], patient["years_since_quit"]),
             "symptoms": symptom_concern(patient.get("symptoms", {})),
         }
+        clinical["diagnosis"] = diagnose(nodules, clinical)
         t["clinical"] = time.time() - t0
-        _emit(case_id, 94, f"Tính Brock + USPSTF + symptoms ({t['clinical']:.2f}s)")
+        _emit(case_id, 94, f"Chẩn đoán: {clinical['diagnosis']['action_title']}")
 
         t0 = time.time()
         html_3d = render_3d_html(

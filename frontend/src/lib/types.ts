@@ -46,10 +46,31 @@ export interface ActiveSymptom {
   weight: SymptomLevel;
 }
 
+export type ActionBand = "urgent" | "soon" | "routine" | "none";
+
+export interface RiskFactor {
+  factor: string;
+  weight: "low" | "medium" | "high";
+}
+
+export interface Diagnosis {
+  summary: string;
+  action: string;
+  action_band: ActionBand;
+  action_title: string;
+  nodule_buckets: { actionable: number; monitor: number; incidental: number };
+  risk_factors: RiskFactor[];
+  max_brock_pct: number;
+  max_diameter_mm: number;
+  index_nodule_id: number | null;
+  index_reason: string;
+}
+
 export interface ClinicalAssessment {
   patient: Patient;
   uspstf: { eligible: boolean; message: string };
   symptoms: { level: SymptomLevel; message: string; active: ActiveSymptom[]; count: number };
+  diagnosis?: Diagnosis;
 }
 
 export interface CaseMeta {
