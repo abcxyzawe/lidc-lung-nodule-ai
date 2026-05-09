@@ -133,8 +133,8 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
         pred = (pred & lung).astype("uint8")
         _emit(case_id, 82, f"Lọc nodule trong phổi — còn {int(pred.sum()):,} voxel")
 
-        t0 = time.time(); nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=60); t["postprocess"] = time.time() - t0
-        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện (≥ ~4.5mm)")
+        t0 = time.time(); nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=120); t["postprocess"] = time.time() - t0
+        _emit(case_id, 86, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} nodule(s) phát hiện (≥ ~5.7mm)")
 
         t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
         n_high = sum(1 for n in nodules if n.get("risk_combined") == "high")
@@ -144,6 +144,14 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
         # Brock per nodule + USPSTF + symptoms
         t0 = time.time()
         n_total = vol.shape[0]
+        # Brock paper assumes "nodule count" = real nodules in CT (typically 1-5).
+        # Our AI has ~5-15% precision, so raw count includes many FPs. Use the
+        # count of clinically-relevant nodules (>= 6mm OR AI suspicious) capped at 5.
+        relevant_count = max(1, min(5, sum(
+            1 for n in nodules
+            if n["diameter_mm"] >= 6.0
+            or float(n.get("ai_susp_prob", 0) or 0) >= 0.5
+        )))
         for n in nodules:
             n["nodule_type"] = detect_nodule_type_from_hu(vol, n["bbox_zyx_voxel"], labeled, n["id"])
             n["upper_lobe"] = is_upper_lobe(n["centroid_zyx_voxel"][0], n_total)
@@ -151,7 +159,7 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
                 age=patient["age"], sex=patient["sex"],
                 family_hx=patient["family_hx"], emphysema=patient["emphysema"],
                 size_mm=n["diameter_mm"], nodule_type=n["nodule_type"],
-                upper_lobe=n["upper_lobe"], count=len(nodules),
+                upper_lobe=n["upper_lobe"], count=relevant_count,
                 spiculated=False,
             )
             n["brock_band"] = brock_band(n["brock_prob"])

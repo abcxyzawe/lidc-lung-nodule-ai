@@ -234,7 +234,7 @@ def diagnose(nodules: list, clinical: dict) -> dict:
         action = ("Bệnh nhân có triệu chứng red-flag (ho ra máu) cộng với "
                   f"{len(actionable)} nodule đáng can thiệp. Theo NICE NG12, "
                   "chỉ định khám chuyên khoa hô hấp/lồng ngực urgent trong 2 tuần.")
-    elif max_diam >= 30 or max_brock >= 0.30:
+    elif max_diam >= 25 or max_brock >= 0.25:
         band = "urgent"
         title = "PET-CT + xem xét sinh thiết"
         action = (f"Có nodule đường kính {max_diam:.1f}mm hoặc Brock 4-yr "
