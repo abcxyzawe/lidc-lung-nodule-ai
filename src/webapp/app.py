@@ -149,20 +149,18 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
         t["postprocess"] = time.time() - t0
         _emit(case_id, 84, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate (≥ 6.5mm, elong ≤ 4)")
 
-        # Merge nodules whose centroids are within 8mm physical distance
         before = len(nodules)
         nodules = merge_nearby_nodules(nodules, voxel_sp, max_dist_mm=10.0)
         if before > len(nodules):
-            _emit(case_id, 85, f"Merge {before - len(nodules)} nodule trùng vùng (cùng tổn thương vật lý)")
+            _emit(case_id, 85, f"Merge {before - len(nodules)} nodule cùng vùng vật lý")
 
-        # Drop subpleural blobs (often FP at lung-wall interface)
         before = len(nodules)
         nodules = filter_subpleural(nodules, lung, voxel_sp, min_dist_mm=2.0)
         if before > len(nodules):
             _emit(case_id, 86, f"Bỏ {before - len(nodules)} subpleural FP")
 
         t0 = time.time(); nodules = predict_malignancy_for_nodules(vol, nodules); t["malignancy"] = time.time() - t0
-        # Drop "ghost nodules": small + AI clearly benign (score 1-2) + low suspicion
+        # Drop ghost nodules: small + AI clearly benign + low suspicion
         before = len(nodules)
         nodules = [
             n for n in nodules
@@ -173,10 +171,10 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
             )
         ]
         if before > len(nodules):
-            _emit(case_id, 88, f"Bỏ {before - len(nodules)} ghost nodule (AI confident-benign + nhỏ)")
+            _emit(case_id, 88, f"Bỏ {before - len(nodules)} ghost nodule")
         n_high = sum(1 for n in nodules if n.get("risk_combined") == "high")
         n_med = sum(1 for n in nodules if n.get("risk_combined") == "medium")
-        _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — còn {len(nodules)} nodule, {n_high} cao, {n_med} trung bình")
+        _emit(case_id, 90, f"Phân loại nguy cơ ({t['malignancy']:.1f}s) — còn {len(nodules)} nodule ({n_high} cao, {n_med} TB)")
 
         # Brock per nodule + USPSTF + symptoms
         t0 = time.time()
