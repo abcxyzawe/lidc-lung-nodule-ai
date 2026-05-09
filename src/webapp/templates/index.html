@@ -3,149 +3,170 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LIDC Lung Nodule AI</title>
+<title>LungScope AI · Phân tích nodule phổi</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<div class="container">
+<div class="app">
 
-  <header class="header">
-    <h1><span class="accent">●</span> AI Phân Tích Nodule Phổi</h1>
-    <p>UNet++ EfficientNet-B5 · DenseNet121-3D Malignancy · Lung-RADS · Brock 2013 · LIDC-IDRI</p>
-  </header>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M6.5 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
+          <path d="M17.5 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>
+          <path d="M12 3v18M5 19l7-3 7 3"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>LungScope AI</h1>
+        <p>Phát hiện nodule phổi · Brock 2013 · Lung-RADS</p>
+      </div>
+    </div>
+    <div class="topbar-stats">
+      <div>Test Dice <b>0.7502</b></div>
+      <div>Recall <b>97.5%</b></div>
+      <div>Brock val <b>0.46</b></div>
+    </div>
+  </div>
+
+  <h2 class="page-title">Phân tích CT mới</h2>
+  <p class="page-subtitle">Upload ảnh CT và điền thông tin lâm sàng (tuỳ chọn). AI sẽ phát hiện nodule, phân loại malignancy, và đánh giá nguy cơ ung thư theo Brock + Lung-RADS.</p>
 
   <div class="card">
-    <h2>Phân tích CT mới</h2>
-    <p class="desc">Upload ảnh CT của bệnh nhân, điền thông tin lâm sàng (tuỳ chọn), AI sẽ phát hiện nodule + đánh giá nguy cơ ung thư.</p>
-
     <form id="upload-form">
 
-      <span class="section-label">1. Ảnh CT (DICOM)</span>
-      <div class="dropzones">
-        <label class="dropzone">
-          <span class="dz-icon">📁</span>
-          <span class="dz-title">Folder DICOM</span>
-          <span class="dz-sub">Chọn cả thư mục .dcm</span>
-          <input type="file" id="files-dir" multiple webkitdirectory directory>
-        </label>
-        <label class="dropzone">
-          <span class="dz-icon">🗜️</span>
-          <span class="dz-title">File .zip</span>
-          <span class="dz-sub">Folder DICOM đã nén</span>
-          <input type="file" id="files-zip" accept=".zip">
-        </label>
-      </div>
-      <p id="file-summary" class="file-summary"></p>
-
-      <span class="section-label">2. Bệnh nhân<span class="opt">— bỏ trống nếu chưa rõ</span></span>
-      <div class="fields">
-        <div class="field">
-          <label for="age">Tuổi</label>
-          <input type="number" id="age" name="age" value="60" min="18" max="100">
+      <!-- ====== SECTION 1: File ====== -->
+      <div class="section">
+        <div class="section-head">
+          <div class="section-num">1</div>
+          <div class="section-title">Ảnh CT (DICOM)</div>
         </div>
-        <div class="field">
-          <label for="sex">Giới</label>
-          <select id="sex" name="sex">
-            <option value="male">Nam</option>
-            <option value="female">Nữ</option>
-          </select>
+        <div class="dropzones">
+          <label class="dropzone">
+            <div class="dz-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+            </div>
+            <span class="dz-title">Chọn folder DICOM</span>
+            <span class="dz-sub">Cả thư mục .dcm</span>
+            <input type="file" id="files-dir" multiple webkitdirectory directory>
+          </label>
+          <label class="dropzone">
+            <div class="dz-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <span class="dz-title">Chọn file .zip</span>
+            <span class="dz-sub">Folder DICOM đã nén</span>
+            <input type="file" id="files-zip" accept=".zip">
+          </label>
         </div>
-        <div class="field">
-          <label for="pack_years">Hút thuốc (gói × năm)</label>
-          <input type="number" id="pack_years" name="pack_years" value="0" min="0" max="120" step="0.5">
-        </div>
-        <div class="field">
-          <label for="years_since_quit">Số năm đã bỏ</label>
-          <input type="number" id="years_since_quit" name="years_since_quit" value="0" min="0" max="80">
-        </div>
+        <p id="file-summary" class="file-summary"></p>
       </div>
 
-      <div class="checkrow">
-        <label><input type="checkbox" name="currently_smoking"> Đang hút thuốc</label>
-        <label><input type="checkbox" name="family_hx"> Tiền sử gia đình ung thư phổi</label>
-        <label><input type="checkbox" name="emphysema"> COPD / khí phế thũng</label>
+      <!-- ====== SECTION 2: Patient ====== -->
+      <div class="section">
+        <div class="section-head">
+          <div class="section-num">2</div>
+          <div class="section-title">Bệnh nhân<span class="opt">— bỏ trống nếu chưa rõ</span></div>
+        </div>
+        <div class="fields">
+          <div class="field">
+            <label for="age">Tuổi</label>
+            <input type="number" id="age" name="age" value="60" min="18" max="100">
+          </div>
+          <div class="field">
+            <label for="sex">Giới</label>
+            <select id="sex" name="sex">
+              <option value="male">Nam</option>
+              <option value="female">Nữ</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="pack_years">Hút thuốc (gói × năm)</label>
+            <input type="number" id="pack_years" name="pack_years" value="0" min="0" max="120" step="0.5">
+          </div>
+          <div class="field">
+            <label for="years_since_quit">Số năm đã bỏ</label>
+            <input type="number" id="years_since_quit" name="years_since_quit" value="0" min="0" max="80">
+          </div>
+        </div>
+
+        <div class="chip-row">
+          <label class="chip">
+            <input type="checkbox" name="currently_smoking">
+            <div class="chip-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span class="chip-label">Đang hút thuốc</span>
+          </label>
+          <label class="chip">
+            <input type="checkbox" name="family_hx">
+            <div class="chip-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span class="chip-label">Tiền sử gia đình ung thư phổi</span>
+          </label>
+          <label class="chip">
+            <input type="checkbox" name="emphysema">
+            <div class="chip-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <span class="chip-label">COPD / khí phế thũng</span>
+          </label>
+        </div>
       </div>
 
-      <span class="section-label">3. Triệu chứng<span class="opt">— tick nếu có</span></span>
-      <div class="symptoms">
-        <label class="sym high">
-          <input type="checkbox" name="sym_hemoptysis">
-          <span class="sym-body">
-            <span class="sym-tag">Red flag</span>
-            <span class="sym-name">🩸 Ho ra máu</span>
-          </span>
-        </label>
-        <label class="sym medium">
-          <input type="checkbox" name="sym_weight_loss">
-          <span class="sym-body">
-            <span class="sym-tag">Đáng kể</span>
-            <span class="sym-name">Sụt cân không rõ nguyên nhân</span>
-          </span>
-        </label>
-        <label class="sym medium">
-          <input type="checkbox" name="sym_clubbing">
-          <span class="sym-body">
-            <span class="sym-tag">Đáng kể</span>
-            <span class="sym-name">Ngón tay dùi trống</span>
-          </span>
-        </label>
-        <label class="sym medium">
-          <input type="checkbox" name="sym_hoarseness">
-          <span class="sym-body">
-            <span class="sym-tag">Đáng kể</span>
-            <span class="sym-name">Khàn tiếng kéo dài</span>
-          </span>
-        </label>
-        <label class="sym low">
-          <input type="checkbox" name="sym_cough">
-          <span class="sym-body">
-            <span class="sym-tag">Nhẹ</span>
-            <span class="sym-name">Ho mạn tính &gt; 3 tuần</span>
-          </span>
-        </label>
-        <label class="sym low">
-          <input type="checkbox" name="sym_chest_pain">
-          <span class="sym-body">
-            <span class="sym-tag">Nhẹ</span>
-            <span class="sym-name">Đau ngực</span>
-          </span>
-        </label>
-        <label class="sym low">
-          <input type="checkbox" name="sym_dyspnea">
-          <span class="sym-body">
-            <span class="sym-tag">Nhẹ</span>
-            <span class="sym-name">Khó thở mới / xấu đi</span>
-          </span>
-        </label>
-        <label class="sym low">
-          <input type="checkbox" name="sym_recurrent_infection">
-          <span class="sym-body">
-            <span class="sym-tag">Nhẹ</span>
-            <span class="sym-name">Nhiễm trùng ngực tái phát</span>
-          </span>
-        </label>
+      <!-- ====== SECTION 3: Symptoms ====== -->
+      <div class="section">
+        <div class="section-head">
+          <div class="section-num">3</div>
+          <div class="section-title">Triệu chứng<span class="opt">— tick nếu có</span></div>
+        </div>
+        <div class="symptoms">
+          {% set syms = [
+            ("sym_hemoptysis","high","🩸 Ho ra máu","Red flag"),
+            ("sym_weight_loss","medium","Sụt cân không rõ nguyên nhân","Đáng kể"),
+            ("sym_clubbing","medium","Ngón tay dùi trống","Đáng kể"),
+            ("sym_hoarseness","medium","Khàn tiếng kéo dài","Đáng kể"),
+            ("sym_cough","low","Ho mạn tính > 3 tuần","Nhẹ"),
+            ("sym_chest_pain","low","Đau ngực","Nhẹ"),
+            ("sym_dyspnea","low","Khó thở mới / xấu đi","Nhẹ"),
+            ("sym_recurrent_infection","low","Nhiễm trùng ngực tái phát","Nhẹ"),
+          ] %}
+          {% for name, weight, label, tag in syms %}
+          <label class="sym {{ weight }}">
+            <input type="checkbox" name="{{ name }}">
+            <div class="sym-check"><svg viewBox="0 0 24 24" fill="none" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div>
+            <div class="sym-body">
+              <div class="sym-name">{{ label }}</div>
+              <span class="sym-tag">{{ tag }}</span>
+            </div>
+          </label>
+          {% endfor %}
+        </div>
       </div>
 
-      <button type="submit" id="submit-btn" class="btn-primary">⚡ Phân tích bằng AI</button>
+      <button type="submit" id="submit-btn" class="btn-lg">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        Phân tích bằng AI
+      </button>
 
       <div id="progress" class="progress">
         <div class="progress-bar"><div id="bar-fill" class="progress-bar-fill"></div></div>
-        <div id="progress-pct" class="progress-pct">0%</div>
-        <div id="progress-text" class="progress-text">Chuẩn bị upload...</div>
+        <div class="progress-row">
+          <div id="progress-pct" class="progress-pct">0%</div>
+          <div id="progress-text" class="progress-text">Chuẩn bị upload...</div>
+        </div>
         <ul id="progress-log" class="progress-log"></ul>
       </div>
-
     </form>
   </div>
 
   {% if cases %}
   <div class="card">
-    <h2>Lịch sử phân tích ({{cases|length}})</h2>
-    <ul class="cases">
+    <div class="card-head">
+      <div class="card-title">Lịch sử phân tích</div>
+      <div class="hist-meta">{{cases|length}} ca</div>
+    </div>
+    <ul class="history">
     {% for c in cases %}
       <li>
-        <a href="/case/{{c.id}}" class="name">{{c.name}}</a>
-        <span class="meta">{{c.n_nodules}} nodule · {{c.n_slices}} slice · {{c.ts}}</span>
+        <a href="/case/{{c.id}}" class="hist-name">{{c.name}}</a>
+        <span class="hist-meta">{{c.n_nodules}} nodule · {{c.n_slices}} slice · {{c.ts}}</span>
       </li>
     {% endfor %}
     </ul>
@@ -153,7 +174,7 @@
   {% endif %}
 
   <footer class="footer">
-    Đồ án LIDC-IDRI · Test Dice 0.7502 · Recall nodule 97.5% · Best val malignancy bal_acc 0.46
+    Đồ án LIDC-IDRI · UNet++ EfficientNet-B5 (seg) · DenseNet121-3D (malignancy) · Lungmask R231 · Brock NEJM 2013
   </footer>
 </div>
 
@@ -171,23 +192,18 @@ const progLog   = document.getElementById("progress-log");
 function updateSummary() {
   const n = dirInput.files.length;
   const z = zipInput.files.length;
-  if (n) summary.textContent = `Đã chọn ${n} file từ folder.`;
-  else if (z) summary.textContent = `Đã chọn ${zipInput.files[0].name}.`;
+  if (n) summary.textContent = `✓ Đã chọn ${n} file từ folder`;
+  else if (z) summary.textContent = `✓ Đã chọn ${zipInput.files[0].name}`;
   else summary.textContent = "";
 }
 dirInput.addEventListener("change", updateSummary);
 zipInput.addEventListener("change", updateSummary);
 
-// Highlight checkbox rows + symptom cards on toggle
-document.querySelectorAll(".checkrow input").forEach(inp => {
-  inp.addEventListener("change", () => {
-    inp.parentElement.classList.toggle("checked", inp.checked);
-  });
+document.querySelectorAll(".chip input").forEach(inp => {
+  inp.addEventListener("change", () => inp.closest(".chip").classList.toggle("checked", inp.checked));
 });
 document.querySelectorAll(".sym input").forEach(inp => {
-  inp.addEventListener("change", () => {
-    inp.closest(".sym").classList.toggle("checked", inp.checked);
-  });
+  inp.addEventListener("change", () => inp.closest(".sym").classList.toggle("checked", inp.checked));
 });
 
 function setProgress(pct, msg) {
@@ -214,11 +230,8 @@ document.getElementById("upload-form").onsubmit = (e) => {
 
   document.querySelectorAll("#upload-form input, #upload-form select").forEach(el => {
     if (el.type === "file") return;
-    if (el.type === "checkbox") {
-      if (el.checked) fd.append(el.name, "true");
-    } else if (el.name) {
-      fd.append(el.name, el.value);
-    }
+    if (el.type === "checkbox") { if (el.checked) fd.append(el.name, "true"); }
+    else if (el.name) { fd.append(el.name, el.value); }
   });
 
   submitBtn.disabled = true;
@@ -231,7 +244,7 @@ document.getElementById("upload-form").onsubmit = (e) => {
     if (ev.lengthComputable) {
       const upPct = Math.round(ev.loaded / ev.total * 100);
       setProgress(Math.round(upPct * 0.3),
-                  `Đang upload ${(ev.loaded/1048576).toFixed(1)} / ${(ev.total/1048576).toFixed(1)} MB`);
+                  `Upload ${(ev.loaded/1048576).toFixed(1)} / ${(ev.total/1048576).toFixed(1)} MB`);
     }
   };
   xhr.onload = () => {
@@ -244,7 +257,6 @@ document.getElementById("upload-form").onsubmit = (e) => {
     const r = JSON.parse(xhr.responseText);
     logLine(`Upload xong (${r.n_dicoms} DICOM). Bắt đầu AI...`, "ok");
     setProgress(30, "Server nhận file, đang khởi động AI...");
-
     const es = new EventSource(`/events/${r.case_id}`);
     es.onmessage = (ev) => {
       const d = JSON.parse(ev.data);
