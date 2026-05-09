@@ -47,9 +47,15 @@ def main():
     ap.add_argument("patient_id", help="ví dụ LIDC-IDRI-0002")
     ap.add_argument("--merge-dist", type=float, default=12.0,
                     help="Khoảng cách centroid (mm) để gộp cùng 1 nodule giữa các radiologist")
+    ap.add_argument("--min-voxels", type=int, default=5,
+                    help="Min voxel để giữ annotation (mặc định 5; đặt 0 để xem cả point markers)")
+    ap.add_argument("--all", action="store_true",
+                    help="Hiện cả point markers (nodule < 3mm + non-nodule)")
     ap.add_argument("--json", action="store_true",
                     help="Xuất JSON thay vì human-readable")
     args = ap.parse_args()
+    if args.all:
+        args.min_voxels = 0
 
     h5p = PRE_DIR / f"{args.patient_id}.h5"
     if not h5p.exists():
@@ -87,7 +93,7 @@ def main():
                               if 0 <= int(e["slice_idx"]) < masks.shape[0]]
                 if not slice_idxs: continue
                 sub = masks[slice_idxs, rad_ch]
-                if sub.sum() < 5: continue
+                if sub.sum() < args.min_voxels: continue
                 coords = np.argwhere(sub > 0)
                 if len(coords) == 0: continue
                 cz_local = int(coords[:, 0].mean())
@@ -163,11 +169,32 @@ def main():
         print(json.dumps(output, indent=2, ensure_ascii=False))
         return
 
-    # Human-readable output
+    # Print raw annotation counts so user knows what was filtered
     print("=" * 70)
     print(f"GROUND TRUTH — {args.patient_id}")
     print("(Annotations từ 4 radiologist trong dataset LIDC-IDRI gốc)")
     print("=" * 70)
+    with h5py.File(h5p, "r") as f:
+        for series_key in f.keys():
+            g = f[series_key]
+            meta_raw = json.loads(g.attrs["nodule_meta"])
+            masks_raw = g["mask_per_rad"][:]
+            from collections import defaultdict as _dd
+            by_raw = _dd(list)
+            for e in meta_raw:
+                by_raw[(e["rad_channel"], e["nodule_id"])].append(e)
+            n_total = len(by_raw)
+            n_polygon = 0
+            for (r, nid), es in by_raw.items():
+                idxs = [int(e["slice_idx"]) for e in es if 0 <= int(e["slice_idx"]) < masks_raw.shape[0]]
+                if idxs and masks_raw[idxs, r].sum() >= 5:
+                    n_polygon += 1
+            n_point = n_total - n_polygon
+            print(f"  Tổng annotations (4 rad):  {n_total}")
+            print(f"    - Có polygon (≥ 3mm):    {n_polygon}")
+            print(f"    - Point markers:         {n_point}  (LIDC dot: nodule < 3mm hoặc non-nodule)")
+            if not args.all and n_point > 0:
+                print(f"  → đang lọc point markers; dùng --all để xem hết")
 
     for s in output["series"]:
         print()
