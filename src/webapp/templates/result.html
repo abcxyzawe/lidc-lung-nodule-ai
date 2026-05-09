@@ -2,28 +2,32 @@
 <html lang="vi">
 <head>
 <meta charset="utf-8">
-<title>Kết quả - {{meta.name}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{meta.name}} — Kết quả</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="container">
 
   <a href="/" class="back">← Trang chủ</a>
-  <h1>{{meta.name}}</h1>
-  <p class="subtitle">Phân tích lúc {{meta.timestamp}}</p>
+
+  <header class="header">
+    <h1>{{meta.name}}</h1>
+    <p>Phân tích lúc {{meta.timestamp}}</p>
+  </header>
 
   {% set n_high = meta.nodules|selectattr('risk_combined','equalto','high')|list|length %}
   {% set n_med  = meta.nodules|selectattr('risk_combined','equalto','medium')|list|length %}
   {% set n_low  = meta.nodules|selectattr('risk_combined','equalto','low')|list|length %}
 
   {% if n_high > 0 %}
-    <div class="banner banner-high">⚠️ <strong>{{n_high}} nodule nguy cơ CAO</strong> — cần khám bác sĩ</div>
+    <div class="banner banner-high">⚠ <strong>{{n_high}} nodule nguy cơ CAO</strong> — cần khám bác sĩ chuyên khoa</div>
   {% elif n_med > 0 %}
-    <div class="banner banner-medium">⚠ <strong>{{n_med}} nodule cần theo dõi</strong> — không cấp tính nhưng nên chụp lại 3-6 tháng</div>
+    <div class="banner banner-medium">⚠ <strong>{{n_med}} nodule cần theo dõi</strong> — không cấp tính, nên chụp lại 3-6 tháng</div>
   {% elif meta.n_nodules > 0 %}
-    <div class="banner banner-low">✅ <strong>Không phát hiện nodule đáng lo</strong> — chỉ có {{n_low}} nốt nhỏ &lt; 6mm (Lung-RADS bỏ qua)</div>
+    <div class="banner banner-low">✓ <strong>Không phát hiện nodule đáng lo</strong> — chỉ có {{n_low}} nốt nhỏ &lt; 6mm (Lung-RADS bỏ qua)</div>
   {% else %}
-    <div class="banner banner-low">✅ <strong>Phổi sạch</strong> — AI không tìm thấy nodule nào ≥ 4.5mm</div>
+    <div class="banner banner-low">✓ <strong>Phổi sạch</strong> — AI không tìm thấy nodule nào ≥ 4.5mm</div>
   {% endif %}
 
   {% if meta.clinical %}
@@ -37,15 +41,16 @@
       {% if cli.symptoms.count > 0 %}
         <div class="banner banner-{{ cli.symptoms.level }}">
           <strong>Triệu chứng ({{cli.symptoms.count}}):</strong> {{ cli.symptoms.message }}
-          <ul style="margin: 6px 0 0 20px; font-size: 0.9em;">
+          <ul style="margin: 6px 0 0 22px; font-size: 0.92em;">
             {% for s in cli.symptoms.active %}
-              <li>{{ s.label }} <span class="brock-pill brock-{{s.weight if s.weight!='medium' else 'medium'}}">{{ s.weight }}</span></li>
+              <li>{{ s.label }} <span class="pill {{ s.weight }}">{{ s.weight }}</span></li>
             {% endfor %}
           </ul>
         </div>
       {% endif %}
       <p class="hint">
-        Bệnh nhân: {{ p.age }} tuổi, {{ "Nam" if p.sex == "male" else "Nữ" }},
+        <strong>Bệnh nhân:</strong>
+        {{ p.age }} tuổi, {{ "Nam" if p.sex == "male" else "Nữ" }},
         {{ p.pack_years }} gói-năm{% if p.currently_smoking %} (đang hút){% elif p.years_since_quit %} (bỏ {{p.years_since_quit}} năm){% endif %},
         {% if p.family_hx %}có{% else %}không{% endif %} tiền sử gia đình,
         {% if p.emphysema %}có{% else %}không{% endif %} COPD.
@@ -54,28 +59,30 @@
   {% endif %}
 
   <div class="stats">
-    <div class="stat"><span class="big">{{meta.n_slices}}</span><span class="lbl">slices CT</span></div>
-    <div class="stat"><span class="big">{{meta.n_nodules}}</span><span class="lbl">nodule phát hiện</span></div>
-    <div class="stat"><span class="big risk-low">{{n_low}}</span><span class="lbl">low (bỏ qua)</span></div>
-    <div class="stat"><span class="big risk-medium">{{n_med}}</span><span class="lbl">medium (theo dõi)</span></div>
-    <div class="stat"><span class="big risk-high">{{n_high}}</span><span class="lbl">high (đáng lo)</span></div>
-    <div class="stat"><span class="big">{{ "%.1f"|format(meta.timing_sec.ai_predict) }}s</span><span class="lbl">AI inference</span></div>
+    <div class="stat"><span class="stat-num">{{meta.n_slices}}</span><span class="stat-label">slices CT</span></div>
+    <div class="stat"><span class="stat-num">{{meta.n_nodules}}</span><span class="stat-label">nodule</span></div>
+    <div class="stat"><span class="stat-num low">{{n_low}}</span><span class="stat-label">low</span></div>
+    <div class="stat"><span class="stat-num medium">{{n_med}}</span><span class="stat-label">medium</span></div>
+    <div class="stat"><span class="stat-num high">{{n_high}}</span><span class="stat-label">high</span></div>
+    <div class="stat"><span class="stat-num">{{ "%.1f"|format(meta.timing_sec.ai_predict) }}s</span><span class="stat-label">AI inference</span></div>
   </div>
 
-  <div class="card plot-wrap">
-    <h2>3D Lung + Nodules (kéo chuột để xoay, scroll để zoom)</h2>
-    {{ plot_html | safe }}
-    <p class="hint">Vỏ phổi xanh trong suốt làm context. Nodule màu đặc — click legend để bật/tắt từng cái.</p>
+  <div class="card">
+    <h2>3D phổi + nodule</h2>
+    <p class="desc">Vỏ phổi xanh trong suốt + nodule màu đặc. Kéo chuột xoay, scroll zoom. Click legend để bật/tắt từng nodule.</p>
+    <div class="plot-host">
+      {{ plot_html | safe }}
+    </div>
   </div>
 
   {% if meta.nodules %}
   <div class="card">
     <h2>Danh sách nodule + đánh giá nguy cơ</h2>
-    <p class="hint">
-      <span class="risk-pill risk-high">cao</span> = AI cho điểm ≥ 4/5 hoặc đường kính &gt; 15mm.
-      <span class="risk-pill risk-medium">trung bình</span> = đáng theo dõi.
-      <span class="risk-pill risk-low">thấp</span> = nốt nhỏ, ít nguy cơ.
-      <span class="risk-pill risk-review">review</span> = AI và size không đồng ý → nên xem kỹ.
+    <p class="desc">
+      <span class="pill low">low</span> bỏ qua,
+      <span class="pill medium">medium</span> theo dõi,
+      <span class="pill high">high</span> cần khám,
+      <span class="pill review">review</span> AI và size không đồng ý — bác sĩ check thêm.
     </p>
     <table>
       <thead>
@@ -89,45 +96,40 @@
       {% for n in meta.nodules %}
         {% set lr = n.get('lung_rads') %}
         {% set risk = n.get('risk_combined', 'low') %}
-        <tr class="risk-row risk-row-{{ risk }}">
+        <tr class="row-{{ risk }}">
           <td>{{ n.id }}</td>
           <td>{{ "%.1f"|format(n.diameter_mm) }} mm</td>
-          <td><small class="dim">{{ n.get('nodule_type', 'solid') }}</small></td>
-          <td><small class="dim">{{ "thuỳ trên" if n.get('upper_lobe') else "thuỳ dưới" }}</small></td>
+          <td><span class="small">{{ n.get('nodule_type', 'solid') }}</span></td>
+          <td><span class="small">{{ "thuỳ trên" if n.get('upper_lobe') else "thuỳ dưới" }}</span></td>
           <td>
             {% if lr %}
               <strong>LR {{ lr.category }}</strong>
-              <small class="dim">{{ lr.label }}</small>
-            {% else %}<small class="dim">—</small>{% endif %}
+              <span class="small">{{ lr.label }}</span>
+            {% else %}—{% endif %}
           </td>
           <td>
             {% if n.get('ai_class') %}
               <strong>{{ n.ai_class }}</strong>
-              <small class="dim">EV {{ "%.2f"|format(n.ai_expected) }}</small>
-            {% else %}<small class="dim">—</small>{% endif %}
+              <span class="small">EV {{ "%.2f"|format(n.ai_expected) }}</span>
+            {% else %}—{% endif %}
           </td>
           <td>
-            {% if n.get('ai_susp_prob') is not none %}{{ "%.0f"|format(n.ai_susp_prob * 100) }}%
-            {% else %}<small class="dim">—</small>{% endif %}
+            {% if n.get('ai_susp_prob') is not none %}{{ "%.0f"|format(n.ai_susp_prob * 100) }}%{% else %}—{% endif %}
           </td>
           <td>
             {% if n.get('brock_prob') is not none %}
-              <span class="brock-pill brock-{{ n.brock_band }}">{{ "%.1f"|format(n.brock_prob * 100) }}%</span>
-            {% else %}<small class="dim">—</small>{% endif %}
+              <span class="pill {{ n.brock_band }}">{{ "%.1f"|format(n.brock_prob * 100) }}%</span>
+            {% else %}—{% endif %}
           </td>
-          <td><span class="risk-pill risk-{{ risk }}">{{ risk }}</span></td>
+          <td><span class="pill {{ risk }}">{{ risk }}</span></td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
     <p class="hint">
-      <strong>AI score:</strong> 1 = lành tính · 5 = ác tính (4-5 = suspicious).
-      <strong>EV</strong> = giá trị kỳ vọng theo softmax.
-      <strong>Lung-RADS</strong> theo đường kính (chuẩn ACR v2022).
-      <strong>Brock 4-yr</strong> = xác suất nodule là ung thư trong 4 năm (McWilliams NEJM 2013).
-      <span class="brock-pill brock-low">&lt;5%</span> theo dõi thường,
-      <span class="brock-pill brock-medium">5-10%</span> chụp lại 3 tháng,
-      <span class="brock-pill brock-high">&gt;10%</span> PET/sinh thiết.
+      <strong>AI score 1-5:</strong> 1 = lành tính, 5 = ác tính (DenseNet121-3D trên LIDC).
+      <strong>Brock 4-yr:</strong> xác suất nodule là ung thư trong 4 năm theo công thức McWilliams NEJM 2013.
+      <strong>Lung-RADS</strong> theo ACR v2022.
     </p>
   </div>
   {% else %}
@@ -135,18 +137,23 @@
   {% endif %}
 
   <div class="card">
-    <h2>Thông tin kỹ thuật</h2>
+    <h2>Thông số kỹ thuật</h2>
     <table>
       <tr><td>Voxel spacing (z, y, x)</td><td>{{ "%.2f, %.2f, %.2f"|format(meta.voxel_spacing_zyx_mm[0], meta.voxel_spacing_zyx_mm[1], meta.voxel_spacing_zyx_mm[2]) }} mm</td></tr>
-      <tr><td>Pred voxels (sum)</td><td>{{ meta.pred_voxels }}</td></tr>
+      <tr><td>Voxel phổi</td><td>{{ meta.lung_voxels }}</td></tr>
+      <tr><td>Voxel pred (∩ phổi)</td><td>{{ meta.pred_voxels }}</td></tr>
       <tr><td>Đọc DICOM</td><td>{{ "%.2f"|format(meta.timing_sec.read_dicom) }} s</td></tr>
-      <tr><td>Phân vùng phổi</td><td>{{ "%.2f"|format(meta.timing_sec.lung_seg) }} s</td></tr>
-      <tr><td>AI nodule (TTA)</td><td>{{ "%.2f"|format(meta.timing_sec.ai_predict) }} s</td></tr>
-      <tr><td>Hậu xử lý + connected components</td><td>{{ "%.2f"|format(meta.timing_sec.postprocess) }} s</td></tr>
+      <tr><td>Lungmask R231</td><td>{{ "%.2f"|format(meta.timing_sec.lung_seg) }} s</td></tr>
+      <tr><td>Segmentation B5 + TTA</td><td>{{ "%.2f"|format(meta.timing_sec.ai_predict) }} s</td></tr>
+      <tr><td>Connected components</td><td>{{ "%.2f"|format(meta.timing_sec.postprocess) }} s</td></tr>
+      <tr><td>DenseNet121 malignancy</td><td>{{ "%.2f"|format(meta.timing_sec.malignancy) }} s</td></tr>
+      {% if meta.timing_sec.clinical is defined %}
+      <tr><td>Brock + USPSTF</td><td>{{ "%.2f"|format(meta.timing_sec.clinical) }} s</td></tr>
+      {% endif %}
       <tr><td>Render Plotly Mesh3d</td><td>{{ "%.2f"|format(meta.timing_sec.render_3d) }} s</td></tr>
     </table>
     <form action="/case/{{case_id}}/delete" method="post" onsubmit="return confirm('Xoá case này?');">
-      <button type="submit" class="danger">Xoá case</button>
+      <button type="submit" class="btn-danger">Xoá case này</button>
     </form>
   </div>
 
