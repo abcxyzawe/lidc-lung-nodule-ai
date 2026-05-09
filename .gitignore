@@ -43,3 +43,10 @@ nohup.out
 *.tar
 *.tar.gz
 *.zip
+
+# Frontend build artifacts (frontend has its own .gitignore but be safe)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/next-env.d.ts

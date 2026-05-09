@@ -12,10 +12,9 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from predict import (
     find_nodules,
@@ -55,14 +54,18 @@ async def lifespan(_app: FastAPI):
         _get_lung_inferer()
     except Exception as e:
         print(f"Lung inferer warmup failed: {e}")
-    print("Ready. http://127.0.0.1:8081")
+    print("Ready. API at http://127.0.0.1:8081/api/* — frontend at http://localhost:3000")
     yield
 
 
-app = FastAPI(title="LIDC Lung Nodule AI", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=WEBAPP_DIR / "static"), name="static")
-app.mount("/results-files", StaticFiles(directory=RESULTS_DIR), name="results-files")
-templates = Jinja2Templates(directory=WEBAPP_DIR / "templates")
+app = FastAPI(title="Nodura API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _list_cases():
@@ -84,11 +87,14 @@ def _list_cases():
     return items
 
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse(
-        "index.html", {"request": request, "cases": _list_cases()}
-    )
+@app.get("/api/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/api/cases")
+def list_cases():
+    return _list_cases()
 
 
 # In-memory progress log per case_id. Each entry is (pct, message).
@@ -190,7 +196,7 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str,
         shutil.rmtree(work, ignore_errors=True)
 
 
-@app.post("/analyze")
+@app.post("/api/analyze")
 async def analyze(
     files: list[UploadFile] = File(...),
     age: int = Form(60),
@@ -258,7 +264,7 @@ async def analyze(
     return JSONResponse({"case_id": case_id, "name": case_label, "n_dicoms": len(dcm_paths)})
 
 
-@app.get("/events/{case_id}")
+@app.get("/api/events/{case_id}")
 async def events(case_id: str):
     """Server-Sent Events stream of progress messages for a case."""
     async def gen():
@@ -282,26 +288,23 @@ async def events(case_id: str):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.get("/case/{case_id}", response_class=HTMLResponse)
-def case_view(request: Request, case_id: str):
+@app.get("/api/case/{case_id}")
+def case_get(case_id: str):
     cdir = RESULTS_DIR / case_id
     meta_p = cdir / "meta.json"
     if not meta_p.exists():
         raise HTTPException(status_code=404, detail="Case không tồn tại.")
     meta = json.loads(meta_p.read_text(encoding="utf-8"))
     html_3d = (cdir / "3d.html").read_text(encoding="utf-8")
-    return templates.TemplateResponse(
-        "result.html",
-        {"request": request, "case_id": case_id, "meta": meta, "plot_html": html_3d},
-    )
+    return {"meta": meta, "plot_html": html_3d}
 
 
-@app.post("/case/{case_id}/delete")
+@app.delete("/api/case/{case_id}")
 def case_delete(case_id: str):
     cdir = RESULTS_DIR / case_id
     if cdir.exists():
         shutil.rmtree(cdir, ignore_errors=True)
-    return RedirectResponse(url="/", status_code=303)
+    return {"deleted": case_id}
 
 
 if __name__ == "__main__":
