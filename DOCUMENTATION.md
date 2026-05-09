@@ -503,7 +503,7 @@ Next.js 16 + TypeScript + Tailwind + shadcn/ui (port 3000)
 | **Models** | UNet++ (segmentation_models_pytorch) · DenseNet121 (MONAI) · lungmask R231 (3rd party) |
 | **Loss** | DiceFocalLoss (MONAI) · CrossEntropy with class weights |
 | **Train tricks** | AMP fp16 · warmup+cosine LR · SWA · top-K snapshot ensemble · TTA |
-| **Eval metrics** | Dice (MONAI) · IoU · HD95 · per-nodule F1 LUNA16-style |
+| **Eval metrics** | Dice (MONAI) · IoU · HD95 · per-nodule F1 (centroid match within 1.5 × GT diameter — lenient, not LUNA16 official `radius = diameter/2`) |
 | **3D** | scipy.ndimage.label · scikit-image marching_cubes · trimesh · Plotly |
 | **Clinical** | Brock NEJM 2013 · USPSTF 2021 · Lung-RADS ACR v2022 · NICE NG12 |
 | **Backend** | FastAPI · Uvicorn · CORS middleware · Server-Sent Events |
@@ -524,7 +524,7 @@ Next.js 16 + TypeScript + Tailwind + shadcn/ui (port 3000)
 | Test slice IoU | 0.6528 | Intersection over Union |
 | Volume dice mean | 0.3529 | Thấp do FP nhiều |
 | HD95 median | 132 mm | Boundary noise |
-| **Recall nodule (LUNA16-style)** | **97.5%** | Bắt được hầu hết nodule thật |
+| **Recall nodule (lenient match, 1.5 × GT diameter — không phải LUNA16 chính thức)** | **97.5%** | Bắt được hầu hết nodule thật theo quy tắc này |
 | Precision nodule | 7.6% | Nhiều FP nhỏ |
 
 ### 13.2. Malignancy (DenseNet121-3D)

@@ -3,7 +3,11 @@
 > **Project:** Đồ án phát hiện nodule phổi từ ảnh CT
 > **Pipeline:** UNet++ + EfficientNet-B5 (2.5D) + Lungmask R231 + post-processing
 > **Evaluation panel:** 12 LIDC-IDRI patients (33 ground-truth nodules)
-> **Match tolerance:** 15 mm centroid distance (LUNA16 convention)
+> **Match tolerance:** fixed 15 mm centroid distance — inspired by common nodule-detection
+> evaluation practice. **Not the official LUNA16 matching rule**, which uses a per-nodule
+> radius criterion (a candidate matches a GT nodule when its centroid lies within `diameter/2`
+> of the GT centroid). Our fixed 15 mm rule is more lenient than LUNA16's for small nodules
+> (LUNA16: 2-3 mm tolerance for a 6 mm nodule; ours: 15 mm regardless).
 
 All raw outputs (FROC plot, JSON metrics, failure-case PNGs) are reproducible by running:
 ```bash
@@ -70,8 +74,8 @@ Threshold → binary mask → connected components 3D → nodule list
 | **Sensitivity** | TP / (TP + FN) — fraction of GT nodules detected |
 | **FP/scan** | Mean false positives per CT scan |
 | **F1** | Harmonic mean of precision and recall |
-| **CPM** | Mean sensitivity at FP/scan ∈ {0.125, 0.25, 0.5, 1, 2, 4, 8} (LUNA16 standard) |
-| **Match rule** | Greedy: each GT matched to nearest unmatched prediction within 15 mm centroid distance |
+| **CPM** | Mean sensitivity at the 7 FP/scan operating points {0.125, 0.25, 0.5, 1, 2, 4, 8}. The set of FP rates is the LUNA16-standard set; the **matching rule** below is **not** the LUNA16 official rule. |
+| **Match rule (ours)** | Greedy: each GT matched to nearest unmatched prediction within **fixed 15 mm** centroid distance. Inspired by common practice but **not** the LUNA16 official `radius = diameter/2` criterion. Our rule is more lenient for small nodules and stricter for very large ones. |
 
 **Threshold sweep** for FROC: 13 thresholds in [0.30, 0.90] (step 0.05).
 
@@ -119,14 +123,19 @@ the segmentation backbone simply does not "see" the missed nodules.
 
 | Model | Reported CPM | Notes |
 |---|---|---|
-| Our pipeline (UNet++ B5 2.5D, LIDC only) | **0.576** | 12-patient panel |
-| DeepLung (Zhu 2018) | 0.842 | LUNA16 (888 scans) |
-| nnDetection (Baumgartner 2021) | 0.918 | LUNA16, auto-config 3D |
-| LungViT 3D (2024) | 0.941 | LUNA16 + extended training set |
+| Our pipeline (UNet++ B5 2.5D, LIDC only) | **0.576** | 12-patient panel, **fixed 15 mm match (not LUNA16 rule)** |
+| DeepLung (Zhu 2018) | 0.842 | LUNA16 official 888 scans + official `radius = diameter/2` match |
+| nnDetection (Baumgartner 2021) | 0.918 | LUNA16 official, auto-config 3D |
+| LungViT 3D (2024) | 0.941 | LUNA16 + extended training set, official match |
 
-Our result is below SOTA. Main causes (see §9 Limitations):
+> ⚠ **Caveat — numbers are not directly comparable.** Our matching rule (fixed 15 mm) is
+> more lenient than LUNA16's official rule (`radius = diameter/2`), which would lower our
+> sensitivity for small nodules. Re-running with the official LUNA16 evaluation script on the
+> 888 LUNA16 test scans is needed for a true apples-to-apples comparison.
+
+Even allowing for the matching difference, the gap to SOTA is real and explained by:
 - LIDC-only training (1010 scans vs LUNA16 SOTA which uses 888 + extra unlabeled)
-- 2.5D not 3D
+- 2.5D model, not 3D
 - Single-fold split, no extensive HP tuning
 - 12-patient evaluation panel has high variance (small denominator)
 
@@ -205,10 +214,15 @@ The latter is a known limitation of LIDC: annotation completeness is variable.
    +0.05–0.10 CPM on LUNA16 but requires 3–5× more training compute.
 4. **No external test set** — all evaluation on LIDC-IDRI. Generalization to Vietnamese hospital
    CT scanners (different vendors, doses, reconstruction kernels) is unknown.
-5. **No statistical significance tests** — single training run, no cross-validation.
+5. **Matching rule is not the LUNA16 official rule** — we use fixed 15 mm centroid distance;
+   LUNA16 uses per-nodule `radius = diameter/2`. Our CPM number is therefore not directly
+   comparable to LUNA16 leaderboard entries. To produce an apples-to-apples LUNA16 number we
+   would need to (a) implement LUNA16's official matching script and (b) evaluate on their
+   888-scan official test set.
+6. **No statistical significance tests** — single training run, no cross-validation.
    For a publication, would need 5-fold CV with bootstrap CIs.
-6. **No comparison against LUNA16 official leaderboard** — would require re-evaluation on
-   their official 888 scans with their evaluation script.
+7. **No comparison against LUNA16 official leaderboard** — would require (5) above plus
+   running their official evaluation script.
 
 ---
 

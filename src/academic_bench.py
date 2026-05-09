@@ -1,13 +1,23 @@
 """Academic-grade benchmark for lung nodule detection pipeline.
 
-Produces LUNA16-standard metrics + ablation study + failure analysis:
+Produces FROC + CPM + ablation + failure analysis:
 
   1. FROC curve and CPM (Competition Performance Metric)
      - Sensitivity at FP/scan = [0.125, 0.25, 0.5, 1, 2, 4, 8]
+       (the 7 operating points are the LUNA16-standard set)
      - CPM = mean of those 7 sensitivities
   2. Size-stratified analysis (small 4-6mm, medium 6-15mm, large >15mm)
   3. Ablation: full vs -TTA vs -lung-mask vs -post-process
   4. Failure analysis: top 3 FN + top 3 FP with PNG export
+
+NOTE — matching rule:
+  We match a predicted nodule to a GT nodule using a *fixed* centroid distance
+  threshold (MATCH_TOL_MM = 15 mm). This is inspired by common nodule-detection
+  evaluation practice but is NOT the LUNA16 official matching rule, which uses
+  a per-nodule radius criterion (a candidate matches GT when centroid distance
+  <= GT_diameter / 2). Our fixed 15 mm is more lenient than LUNA16 for small
+  nodules. CPM numbers from this script are therefore not directly comparable
+  to the LUNA16 leaderboard.
 
 All outputs to work/academic/. Run: python academic_bench.py
 """
@@ -36,9 +46,9 @@ ACADEMIC_DIR = WORK / "academic"
 PROBS_DIR = ACADEMIC_DIR / "probs"
 FAILURE_DIR = ACADEMIC_DIR / "failure_cases"
 
-LUNA16_FP_RATES = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+LUNA16_FP_RATES = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]  # LUNA16-standard set
 THRESHOLD_SWEEP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
-MATCH_TOL_MM = 15.0
+MATCH_TOL_MM = 15.0  # fixed-distance match — NOT the LUNA16 official radius rule (see module docstring)
 
 
 def infer_and_cache(pid, vol, voxel_sp, tta):
@@ -341,7 +351,12 @@ def main():
             "seg_model": "UNet++ EfficientNet-B5 (best.pt + swa.pt ensemble)",
             "lung_mask": "Lungmask R231 (Hofmanninger 2020)",
             "filters": "min_voxels=200, max_elongation=4, merge<10mm, subpleural>2mm",
+            "match_rule": (
+                "fixed centroid distance <= 15 mm; not the LUNA16 official "
+                "radius=diameter/2 rule"
+            ),
             "match_tolerance_mm": MATCH_TOL_MM,
+            "luna16_fp_rates_used": LUNA16_FP_RATES,
         },
     }
     out_json = ACADEMIC_DIR / "results.json"

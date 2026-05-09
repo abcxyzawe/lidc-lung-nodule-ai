@@ -3,7 +3,8 @@
 Metrics:
   - Slice-level: Dice, IoU (TTA-averaged)
   - Volume-level (per series): mean Dice across whole volume
-  - Per-nodule F1 (LUNA16 style): centroid match within 1.5*diam tolerance
+  - Per-nodule F1: centroid match within 1.5 * GT diameter (lenient match;
+    NOT the LUNA16 official rule which uses radius = diameter/2)
   - Hausdorff distance 95% (HD95)
 
 Supports ensemble: pass --ckpts a.pt,b.pt,c.pt → average sigmoid outputs.
@@ -85,7 +86,12 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS):
 
 
 def per_nodule_f1(gt_mask, pred_mask, voxel_sp, tol_factor=1.5):
-    """LUNA16-style F1: prediction matches GT if centroid dist <= tol_factor * GT diameter."""
+    """Per-nodule F1: prediction matches GT if centroid distance <= tol_factor * GT diameter.
+
+    NOTE: tol_factor=1.5 is more lenient than the LUNA16 official rule
+    (radius = diameter/2, equivalent to tol_factor=0.5). Numbers from this script
+    are therefore not directly comparable to LUNA16 leaderboard entries.
+    """
     gt = find_nodules(gt_mask, voxel_sp)
     pr = find_nodules(pred_mask, voxel_sp)
     if not gt and not pr: return {"tp":0,"fp":0,"fn":0,"precision":1.0,"recall":1.0,"f1":1.0,
@@ -233,7 +239,7 @@ def main():
         "volume_dice_median": float(np.nanmedian(vol_dices)),
         "hd95_mean_mm": float(np.nanmean(hd95s)),
         "hd95_median_mm": float(np.nanmedian(hd95s)),
-        # Per-nodule F1 (LUNA16 style)
+        # Per-nodule F1 (lenient 1.5 * diameter match — NOT the LUNA16 official radius rule)
         "n_nodules_gt": n_gt_total,
         "n_nodules_pred": n_pred_total,
         "tp": tp_total, "fp": fp_total, "fn": fn_total,
