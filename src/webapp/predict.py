@@ -534,22 +534,19 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
         vol_full = float(len(coords)) * float(np.prod(voxel_sp))
         diam_full = 2 * (3 * vol_full / (4 * np.pi)) ** (1 / 3)
 
-        # Tight measurement using prob > core_threshold within this blob
+        # Tight measurement: equivalent-sphere diameter from CORE (prob > 0.85)
+        # The core is the high-confidence interior of the AI blob; closer to
+        # the actual nodule than the full mask which leaks into surrounding tissue.
+        core_voxels = 0
         if prob_volume is not None:
             blob_mask = (lab == i)
             core = blob_mask & (prob_volume > core_threshold)
-            core_coords = np.argwhere(core)
-            if len(core_coords) >= 8:
-                vol_core = float(len(core_coords)) * float(np.prod(voxel_sp))
-                # Use long-axis (clinical) diameter from core
-                long_axis = _long_axis_diameter_mm(core_coords, voxel_sp)
-                # Equivalent sphere as fallback
-                diam_core_sphere = 2 * (3 * vol_core / (4 * np.pi)) ** (1 / 3)
-                # Take the LARGER of core long-axis and core sphere
-                # (avoids underestimating very compact nodules)
-                diam = max(long_axis, diam_core_sphere)
+            core_voxels = int(core.sum())
+            if core_voxels >= 8:
+                vol_core = float(core_voxels) * float(np.prod(voxel_sp))
+                diam = 2 * (3 * vol_core / (4 * np.pi)) ** (1 / 3)
             else:
-                diam = diam_full * 0.7  # fallback shrink heuristic
+                diam = diam_full * 0.7
         else:
             diam = diam_full
 
@@ -558,6 +555,7 @@ def find_nodules(mask_3d, voxel_sp, min_voxels=MIN_NODULE_VOXELS,
         out.append({
             "id": int(i),
             "voxels": int(len(coords)),
+            "core_voxels": core_voxels,
             "volume_mm3": float(vol_mm3),
             "diameter_mm": float(diam),
             "diameter_full_mm": float(diam_full),
