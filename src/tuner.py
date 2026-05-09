@@ -21,6 +21,7 @@ from configs import WORK
 
 STATE_PATH = WORK / "tuner_state.json"
 LOG_PATH = WORK / "tuner_log.txt"
+LOCK_PATH = WORK / "tuner.lock"
 
 
 # Parameter grid — most impactful knobs
@@ -117,10 +118,23 @@ def main():
         # TODO: patch webapp/app.py with these params
         return
 
+    # Lock: skip if previous combo still running
+    if LOCK_PATH.exists():
+        age = time.time() - LOCK_PATH.stat().st_mtime
+        if age < 1200:  # 20 min stale window
+            log(f"Lock present (age {age:.0f}s) — previous combo still running, skip.")
+            return
+        else:
+            log(f"Lock stale ({age:.0f}s) — removing.")
+            LOCK_PATH.unlink(missing_ok=True)
+
     # Run next combo
     if state["next_idx"] >= len(PARAM_GRID):
         log(f"All {len(PARAM_GRID)} combos done. Use --status to see best.")
         return
+
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOCK_PATH.write_text(str(os.getpid()))
 
     combo = PARAM_GRID[state["next_idx"]]
     threshold, min_voxels, max_elong, merge_dist, subpleural, ensemble = combo
@@ -150,11 +164,13 @@ def main():
 
     if proc.returncode != 0:
         log(f"FAILED ({dt:.0f}s): {proc.stderr[-500:]}")
+        LOCK_PATH.unlink(missing_ok=True)
         # Don't advance index; will retry next iteration
         return
 
     if not out_json.exists():
         log(f"FAILED: no output file ({dt:.0f}s)")
+        LOCK_PATH.unlink(missing_ok=True)
         return
 
     result = json.loads(out_json.read_text())
@@ -165,6 +181,7 @@ def main():
     state["results"].append(result)
     state["next_idx"] += 1
     save_state(state)
+    LOCK_PATH.unlink(missing_ok=True)
 
     b = best_so_far(state["results"])
     if b:
