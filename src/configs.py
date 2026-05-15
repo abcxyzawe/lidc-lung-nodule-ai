@@ -8,7 +8,7 @@ from pathlib import Path
 # ROOT can be overridden by env var LIDC_ROOT (e.g. /workspace on remote).
 # Default: Windows local path.
 import os as _os
-ROOT       = Path(_os.environ.get("LIDC_ROOT", r"E:/Phan Tich Ung Thu"))
+ROOT       = Path(__os.environ.get("LIDC_ROOT", r"E:/Phan Tich Ung Thu"))
 DICOM_ROOT = ROOT / "manifest-1600709154662" / "LIDC-IDRI"
 XML_ROOT   = ROOT / "tcia-lidc-xml"
 WORK       = ROOT / "work"
@@ -23,10 +23,10 @@ PRE_DIR        = WORK / "preprocessed"
 SPLITS_JSON    = WORK / "splits.json"
 RUNS_DIR       = WORK / "runs"
 
-# Remote container
-REMOTE_HOST = "159.48.242.1"
-REMOTE_PORT = 25015
-REMOTE_USER = "root"
+# Remote container (override via env)
+REMOTE_HOST = _os.environ.get("LIDC_VPS_HOST", "")
+REMOTE_PORT = int(_os.environ.get("LIDC_VPS_PORT", "22"))
+REMOTE_USER = _os.environ.get("LIDC_VPS_USER", "root")
 REMOTE_KEY  = Path.home() / ".ssh" / "lidc_remote"
 REMOTE_WORK = "/workspace"
 
@@ -67,10 +67,10 @@ SNAPSHOT_K = 3
 
 # Inference
 TTA_ENABLED       = True
-THRESHOLD_DEFAULT = 0.5
+THRESHOLD_DEFAULT = 0.97
 ENSEMBLE_INFER    = True   # average over snapshot ensemble at inference
 
 # ============ 3D detection / rendering ============
-MIN_NODULE_VOXELS = 30          # drop predicted blobs smaller than N voxels
+MIN_NODULE_VOXELS = 120          # drop predicted blobs smaller than N voxels
 DEFAULT_SPACING_XY = 0.7        # mm/pixel fallback if DICOM missing
 RENDER_LUNG_SHELL  = True       # show transparent lung context in 3D

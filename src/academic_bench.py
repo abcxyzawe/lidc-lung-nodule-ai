@@ -39,7 +39,8 @@ from predict import (  # noqa: E402
     get_malignancy_model, get_model, get_swa_model,
     merge_nearby_nodules, predict_nodules, segment_lung,
 )
-from benchmark import load_patient, DEFAULT_PANEL  # noqa: E402
+from benchmark import load_patient  # noqa: E402
+from panels import load_panel, DEBUG_PANEL  # noqa: E402
 from configs import WORK  # noqa: E402
 
 ACADEMIC_DIR = WORK / "academic"
@@ -47,8 +48,9 @@ PROBS_DIR = ACADEMIC_DIR / "probs"
 FAILURE_DIR = ACADEMIC_DIR / "failure_cases"
 
 LUNA16_FP_RATES = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]  # LUNA16-standard set
-THRESHOLD_SWEEP = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
-MATCH_TOL_MM = 15.0  # fixed-distance match — NOT the LUNA16 official radius rule (see module docstring)
+THRESHOLD_SWEEP = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
+MATCH_TOL_MM = 15.0  # fallback for fixed-distance matching
+MIN_RADIUS_MM = 5.0  # minimum effective radius for LUNA16-style matching (very small nodules need some tolerance)
 
 
 def infer_and_cache(pid, vol, voxel_sp, tta):
@@ -86,20 +88,35 @@ def detect_at_threshold(prob_vol, lung_mask, voxel_sp, threshold,
     return nodules
 
 
-def match_predictions_to_gt(pred_nodules, gt_nodules, voxel_sp, tol_mm=MATCH_TOL_MM):
+def match_predictions_to_gt(pred_nodules, gt_nodules, voxel_sp,
+                            rule: str = "luna16_radius",
+                            tol_mm: float = MATCH_TOL_MM,
+                            min_radius_mm: float = MIN_RADIUS_MM):
+    """Match predicted nodules to GT nodules.
+
+    rule:
+      - "luna16_radius": A prediction matches a GT if centroid distance
+        <= max(GT_diameter/2, min_radius_mm). This is the official LUNA16
+        rule. min_radius_mm provides tolerance for very small annotations.
+      - "fixed_15mm": Fixed centroid distance <= tol_mm regardless of size.
+    """
     if not gt_nodules or not pred_nodules:
         return [], list(range(len(gt_nodules))), list(range(len(pred_nodules)))
     used_pred = set()
     matched = []
     for gi, g in enumerate(gt_nodules):
         gc = np.array(g["centroid_zyx_voxel"]) * np.array(voxel_sp)
+        if rule == "luna16_radius":
+            tol = max(g["diam_mm"] / 2, min_radius_mm)
+        else:
+            tol = tol_mm
         best_pi, best_d = None, float("inf")
         for pi, p in enumerate(pred_nodules):
             if pi in used_pred: continue
             pc = np.array(p["centroid_zyx_voxel"]) * np.array(voxel_sp)
             d = np.linalg.norm(gc - pc)
             if d < best_d: best_d, best_pi = d, pi
-        if best_pi is not None and best_d <= tol_mm:
+        if best_pi is not None and best_d <= tol:
             matched.append((gi, best_pi, best_d))
             used_pred.add(best_pi)
     unmatched_gt = [i for i in range(len(gt_nodules)) if i not in {m[0] for m in matched}]
@@ -107,12 +124,21 @@ def match_predictions_to_gt(pred_nodules, gt_nodules, voxel_sp, tol_mm=MATCH_TOL
     return matched, unmatched_gt, unmatched_pred
 
 
-def assess_at_threshold(patient_data, threshold, use_lung_mask=True, use_postproc=True):
+def assess_at_threshold(patient_data, threshold, use_lung_mask=True, use_postproc=True,
+                        match_rule: str = "luna16_radius",
+                        min_voxels: int = 200, max_elongation: float = 4.0,
+                        merge_dist_mm: float = 10.0, subpleural_dist_mm: float = 2.0):
     tp = fp = fn = n_gt = n_pred = 0
     for pd in patient_data:
         nodules = detect_at_threshold(pd["prob"], pd["lung"], pd["voxel_sp"],
-                                      threshold, use_lung_mask, use_postproc)
-        matched, u_gt, u_pred = match_predictions_to_gt(nodules, pd["gt"], pd["voxel_sp"])
+                                      threshold, use_lung_mask, use_postproc,
+                                      min_voxels=min_voxels)
+        # Apply elongation/merge/subpleural overrides if defaults differ
+        # (currently detect_at_threshold uses fixed 4.0 / 10.0 / 2.0; for sweep
+        # we pass these via separate code path in tuner — see tune_detection_params.py)
+        matched, u_gt, u_pred = match_predictions_to_gt(
+            nodules, pd["gt"], pd["voxel_sp"], rule=match_rule
+        )
         tp += len(matched); fp += len(u_pred); fn += len(u_gt)
         n_gt += len(pd["gt"]); n_pred += len(nodules)
     sens = tp / max(n_gt, 1)
@@ -125,11 +151,11 @@ def assess_at_threshold(patient_data, threshold, use_lung_mask=True, use_postpro
             "precision": float(prec), "f1": float(f1)}
 
 
-def compute_froc(patient_data, thresholds=THRESHOLD_SWEEP):
+def compute_froc(patient_data, thresholds=THRESHOLD_SWEEP, match_rule="luna16_radius"):
     points = []
     print(f"  Sweeping {len(thresholds)} thresholds for FROC ...", flush=True)
     for thr in thresholds:
-        res = assess_at_threshold(patient_data, thr)
+        res = assess_at_threshold(patient_data, thr, match_rule=match_rule)
         points.append({"threshold": thr, "fp_per_scan": res["fp_per_scan"],
                        "sensitivity": res["sensitivity"],
                        "tp": res["tp"], "fp": res["fp"], "fn": res["fn"]})
@@ -172,13 +198,13 @@ def plot_froc(froc, out_path):
     plt.tight_layout(); plt.savefig(out_path, dpi=120); plt.close()
 
 
-def stratified(patient_data, threshold=0.65):
+def stratified(patient_data, threshold=0.65, match_rule="luna16_radius"):
     buckets = {"small_4_6mm": (4, 6), "medium_6_15mm": (6, 15), "large_15mm_plus": (15, 999)}
     bs = {k: {"tp": 0, "fn": 0, "n_gt": 0} for k in buckets}
     for pd in patient_data:
         nodules = detect_at_threshold(pd["prob"], pd["lung"], pd["voxel_sp"],
                                       threshold, True, True)
-        matched, u_gt, _ = match_predictions_to_gt(nodules, pd["gt"], pd["voxel_sp"])
+        matched, u_gt, _ = match_predictions_to_gt(nodules, pd["gt"], pd["voxel_sp"], rule=match_rule)
         matched_idx = {m[0] for m in matched}
         for gi, g in enumerate(pd["gt"]):
             d = g["diam_mm"]
@@ -249,12 +275,12 @@ def export_failure_png(vol, voxel_sp, gt, pred, title, out_path):
     pim.save(out_path)
 
 
-def failure(patient_data, threshold=0.65):
+def failure(patient_data, threshold=0.65, match_rule="luna16_radius"):
     all_fn, all_fp = [], []
     for pd in patient_data:
         nodules = detect_at_threshold(pd["prob"], pd["lung"], pd["voxel_sp"],
                                       threshold, True, True)
-        matched, u_gt, u_pred = match_predictions_to_gt(nodules, pd["gt"], pd["voxel_sp"])
+        matched, u_gt, u_pred = match_predictions_to_gt(nodules, pd["gt"], pd["voxel_sp"], rule=match_rule)
         for gi in u_gt:
             all_fn.append({"pd": pd, "gt": pd["gt"][gi], "diam": pd["gt"][gi]["diam_mm"]})
         for pi in u_pred:
@@ -289,14 +315,28 @@ def failure(patient_data, threshold=0.65):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--patients", default=",".join(DEFAULT_PANEL))
+    ap.add_argument("--panel", choices=["debug", "val", "test"], default="debug",
+                    help="Which evaluation panel to use")
+    ap.add_argument("--patients", default="",
+                    help="Comma-separated patient IDs (overrides --panel)")
     ap.add_argument("--threshold", type=float, default=0.65)
+    ap.add_argument("--match-rule", choices=["luna16_radius", "fixed_15mm"],
+                    default="luna16_radius",
+                    help="Matching rule for predictions vs GT")
+    ap.add_argument("--out-name", default="results",
+                    help="Output JSON name in work/academic/")
     ap.add_argument("--skip-ablation", action="store_true")
     args = ap.parse_args()
 
     ACADEMIC_DIR.mkdir(parents=True, exist_ok=True)
-    pids = [p.strip() for p in args.patients.split(",") if p.strip()]
-    print(f"=== Academic benchmark on {len(pids)} patients ===\n", flush=True)
+    if args.patients:
+        pids = [p.strip() for p in args.patients.split(",") if p.strip()]
+        panel_name = "custom"
+    else:
+        pids = load_panel(args.panel)
+        panel_name = args.panel
+    print(f"=== Academic benchmark on {panel_name} panel ({len(pids)} patients) ===", flush=True)
+    print(f"=== Match rule: {args.match_rule} ===\n", flush=True)
     print("Loading models ...", flush=True)
     get_model(); get_swa_model(); get_malignancy_model()
 
@@ -314,14 +354,14 @@ def main():
         print(f"  [{i+1}/{len(pids)}] {pid}: {len(data['gt_nodules'])} GT, {time.time()-t0:.1f}s", flush=True)
 
     print(f"\n[Step 2] FROC + CPM", flush=True)
-    froc = compute_froc(patient_data)
-    plot_froc(froc, ACADEMIC_DIR / "froc.png")
+    froc = compute_froc(patient_data, match_rule=args.match_rule)
+    plot_froc(froc, ACADEMIC_DIR / f"froc_{panel_name}.png")
     print(f"\n  CPM = {froc['cpm']:.4f}")
     for p in froc["luna16_points"]:
         print(f"    FP/scan={p['fp_per_scan']:>6.3f}  sens={p['sensitivity']:.3f}")
 
     print(f"\n[Step 3] Stratified @ thr={args.threshold}", flush=True)
-    strat = stratified(patient_data, args.threshold)
+    strat = stratified(patient_data, args.threshold, match_rule=args.match_rule)
     for name, s in strat.items():
         sens = f"{s['sensitivity']:.3f}" if s['sensitivity'] is not None else "N/A"
         print(f"  {name:18} (n_gt={s['n_gt']:3}): sens={sens}  TP={s['tp']} FN={s['fn']}")
@@ -335,13 +375,18 @@ def main():
             print(f"  {name:<20} {m['sensitivity']:>7.3f} {m['precision']:>7.3f} {m['f1']:>7.3f} {m['fp_per_scan']:>10.2f}")
 
     print(f"\n[Step 5] Failure analysis @ thr={args.threshold}", flush=True)
-    failures = failure(patient_data, args.threshold)
+    failures = failure(patient_data, args.threshold, match_rule=args.match_rule)
     for fn in failures["false_negatives"]:
         print(f"  FN: {fn['pid']} {fn['gt_diam_mm']:.1f}mm (mal={fn['malignancy_mean']})")
     for fp in failures["false_positives"]:
         print(f"  FP: {fp['pid']} {fp['diam_mm']:.1f}mm conf={fp['confidence']*100:.0f}%")
 
+    match_rule_desc = (
+        "LUNA16 official: centroid <= max(GT_diameter/2, 5mm)" if args.match_rule == "luna16_radius"
+        else "fixed centroid distance <= 15 mm"
+    )
     summary = {
+        "panel": panel_name,
         "n_patients": len(patient_data),
         "patient_ids": [pd["pid"] for pd in patient_data],
         "default_threshold": args.threshold,
@@ -351,15 +396,11 @@ def main():
             "seg_model": "UNet++ EfficientNet-B5 (best.pt + swa.pt ensemble)",
             "lung_mask": "Lungmask R231 (Hofmanninger 2020)",
             "filters": "min_voxels=200, max_elongation=4, merge<10mm, subpleural>2mm",
-            "match_rule": (
-                "fixed centroid distance <= 15 mm; not the LUNA16 official "
-                "radius=diameter/2 rule"
-            ),
-            "match_tolerance_mm": MATCH_TOL_MM,
+            "match_rule": match_rule_desc,
             "luna16_fp_rates_used": LUNA16_FP_RATES,
         },
     }
-    out_json = ACADEMIC_DIR / "results.json"
+    out_json = ACADEMIC_DIR / f"{args.out_name}.json"
     out_json.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
     print(f"\n=== Done ===")
     print(f"FROC plot:   {ACADEMIC_DIR / 'froc.png'}")

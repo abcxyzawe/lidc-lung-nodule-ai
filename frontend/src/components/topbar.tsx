@@ -27,17 +27,6 @@ export function Topbar({ subtitle }: { subtitle?: string }) {
           </div>
         </Link>
 
-        <div className="hidden items-center gap-5 text-xs text-muted-foreground md:flex">
-          <span>
-            Test Dice <b className="font-semibold text-foreground">0.7502</b>
-          </span>
-          <span>
-            Recall <b className="font-semibold text-foreground">97.5%</b>
-          </span>
-          <span>
-            Brock val <b className="font-semibold text-foreground">0.46</b>
-          </span>
-        </div>
       </div>
     </header>
   );

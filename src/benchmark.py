@@ -138,8 +138,10 @@ def load_patient(pid: str) -> dict:
     if not h5p.exists():
         return None
     with h5py.File(h5p, "r") as f:
-        # Take first series (usually only 1 per patient in LIDC)
-        series_key = next(iter(f.keys()))
+        keys = list(f.keys())
+        if not keys:
+            return None
+        series_key = keys[0]
         g = f[series_key]
         images = g["images"][:].astype(np.int16)
         pixel_sp = json.loads(g.attrs["pixel_spacing"])

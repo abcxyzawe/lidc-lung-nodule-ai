@@ -18,9 +18,6 @@ export default function Home() {
         </header>
         <UploadForm />
         <HistoryList />
-        <footer className="pt-8 text-center text-xs text-muted-foreground">
-          UNet++ EfficientNet-B5 · DenseNet121-3D · Lungmask R231 · Brock NEJM 2013 · Lung-RADS ACR v2022
-        </footer>
       </main>
     </>
   );

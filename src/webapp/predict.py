@@ -32,9 +32,13 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _MODEL = None
 _MODEL_SWA = None
 _MALIGNANCY_MODEL = None
+_FPR_MODEL = None
 _LUNG_INFERER = None
 _MAL_HU = (-1024.0, 600.0)
 _MAL_PATCH = 32
+_FPR_HU = (-1024.0, 600.0)
+_FPR_PATCH = 48
+_FPR_THR = 0.5
 
 
 def get_model(ckpt_path: Path = None):
@@ -95,6 +99,63 @@ def get_malignancy_model(ckpt_path: Path = None):
         _MALIGNANCY_MODEL = m
         print(f"Malignancy model loaded (DenseNet121-3D, {n_classes} classes), patch {_MAL_PATCH}^3")
     return _MALIGNANCY_MODEL
+
+
+def get_fpr_model(ckpt_path: Path = None):
+    """Lazy-load the 3D FPR (false-positive reduction) classifier. Returns None if missing."""
+    global _FPR_MODEL, _FPR_THR
+    if _FPR_MODEL is False:
+        return None
+    if _FPR_MODEL is None:
+        ckpt_path = ckpt_path or (RUNS_DIR / "fpr.pt")
+        if not ckpt_path.exists():
+            print(f"FPR classifier not found at {ckpt_path}; skipping FP filtering.")
+            _FPR_MODEL = False
+            return None
+        from monai.networks.nets import DenseNet121
+        ck = torch.load(ckpt_path, map_location=DEVICE, weights_only=False)
+        m = DenseNet121(spatial_dims=3, in_channels=1, out_channels=2).to(DEVICE)
+        m.load_state_dict(ck["model"])
+        m.train(False)
+        _FPR_MODEL = m
+        _FPR_THR = float(ck.get("best_thr", 0.5))
+        print(f"FPR model loaded (DenseNet121-3D binary), AUC={ck.get('auc')}, thr={_FPR_THR}")
+    return _FPR_MODEL
+
+
+def predict_fpr_for_nodules(volume_hu: np.ndarray, nodules: list) -> list:
+    """Score each nodule with the FPR classifier. Adds 'fpr_prob' to each nodule.
+
+    fpr_prob in [0,1] = P(true_nodule). If model unavailable, sets fpr_prob=None.
+    Does not filter — purely additive signal for the UI/downstream rule.
+    """
+    model = get_fpr_model()
+    if model is None or not nodules:
+        for n in nodules:
+            n["fpr_prob"] = None
+        return nodules
+    P = _FPR_PATCH
+    H = P // 2
+    N, Hv, Wv = volume_hu.shape
+    patches = []
+    for n in nodules:
+        cz, cy, cx = [int(round(c)) for c in n["centroid_zyx_voxel"]]
+        z0, z1 = max(0, cz - H), min(N, cz + H)
+        y0, y1 = max(0, cy - H), min(Hv, cy + H)
+        x0, x1 = max(0, cx - H), min(Wv, cx + H)
+        crop = volume_hu[z0:z1, y0:y1, x0:x1].astype(np.float32)
+        crop = np.clip(crop, _FPR_HU[0], _FPR_HU[1])
+        crop = (crop - _FPR_HU[0]) / (_FPR_HU[1] - _FPR_HU[0])
+        padded = np.zeros((P, P, P), dtype=np.float32)
+        pz0 = H - (cz - z0); py0 = H - (cy - y0); px0 = H - (cx - x0)
+        padded[pz0:pz0+crop.shape[0], py0:py0+crop.shape[1], px0:px0+crop.shape[2]] = crop
+        patches.append(padded)
+    x = torch.from_numpy(np.stack(patches, 0)).unsqueeze(1).float().to(DEVICE)
+    with torch.no_grad(), torch.amp.autocast("cuda", enabled=DEVICE.type == "cuda"):
+        p = torch.softmax(model(x), dim=1)[:, 1].cpu().numpy()
+    for i, n in enumerate(nodules):
+        n["fpr_prob"] = float(p[i])
+    return nodules
 
 
 def normalize(x):
@@ -595,7 +656,7 @@ def render_3d_html(lung_mask, pred_mask, voxel_sp, labeled_pred, nodules, title=
                "#f15bb5", "#9b5de5", "#ff5d8f", "#fb8500"]
     nodules_to_render = nodules[:max_nodule_meshes]
     for k, nod in enumerate(nodules_to_render):
-        nid = nod["id"]
+        nid = nod.get("original_id", nod["id"])  # labeled_pred uses pre-sort ids
         zmin, ymin, xmin, zmax, ymax, xmax = nod["bbox_zyx_voxel"]
         # Pad bbox by 1 voxel for clean marching cubes boundary
         zmin = max(0, zmin - 1); ymin = max(0, ymin - 1); xmin = max(0, xmin - 1)

@@ -20,6 +20,7 @@ from predict import (
     clean_mask,
     filter_subpleural,
     find_nodules,
+    predict_fpr_for_nodules,
     get_malignancy_model,
     get_model,
     get_swa_model,
@@ -132,7 +133,7 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
                 _emit(case_id, pct, f"AI đang infer slice {i+1}/{total}")
                 last_emit[0] = now
         t0 = time.time()
-        prob_vol, pred = predict_nodules(vol, threshold=0.65, tta=True, ensemble=True,
+        prob_vol, pred = predict_nodules(vol, threshold=0.97, tta=True, ensemble=True,
                                          progress=progress_cb)
         t["ai_predict"] = time.time() - t0
         _emit(case_id, 80, f"AI inference xong ({t['ai_predict']:.1f}s, ensemble best+swa) — pred {int(pred.sum()):,} voxel")
@@ -145,7 +146,7 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
 
         t0 = time.time()
         # Pass prob_vol for tight (core>0.85) diameter measurement
-        nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=200, max_elongation=4.0,
+        nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=120, max_elongation=4.0,
                                         prob_volume=prob_vol, core_threshold=0.85)
         t["postprocess"] = time.time() - t0
         _emit(case_id, 84, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate, đo size từ core (prob>0.85)")
@@ -156,9 +157,15 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
             _emit(case_id, 85, f"Merge {before - len(nodules)} nodule cùng vùng vật lý")
 
         before = len(nodules)
-        nodules = filter_subpleural(nodules, lung, voxel_sp, min_dist_mm=2.0)
+        nodules = filter_subpleural(nodules, lung, voxel_sp, min_dist_mm=0.0)
         if before > len(nodules):
             _emit(case_id, 86, f"Bỏ {before - len(nodules)} subpleural FP")
+
+        # Phase 2: 3D FPR classifier — adds n["fpr_prob"] in [0,1].
+        # Doesn't filter; downstream UI uses it as additional signal.
+        nodules = predict_fpr_for_nodules(vol, nodules)
+        kept_high = sum(1 for n in nodules if (n.get("fpr_prob") or 0) >= 0.5)
+        _emit(case_id, 87, f"FPR classifier: {kept_high}/{len(nodules)} candidates score >= 0.5")
 
         # Per-nodule descriptors: type, lobe location, Lung-RADS by size
         t0 = time.time()
@@ -177,8 +184,9 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
                 n["confidence"] = 0.0
         # Sort by confidence (highest first) — radiologist reviews top suspects first
         nodules.sort(key=lambda n: -n["confidence"])
-        # Renumber so #1 is most confident
+        # Renumber so #1 is most confident — keep original_id so labeled_pred lookups still work
         for new_id, n in enumerate(nodules, 1):
+            n["original_id"] = n["id"]
             n["id"] = new_id
         t["postprocess_extra"] = time.time() - t0
         _emit(case_id, 92, f"Sort theo confidence — #1 cao nhất {nodules[0]['confidence']*100:.0f}% nếu có" if nodules else "Không có nodule")
@@ -295,7 +303,35 @@ def case_get(case_id: str):
         raise HTTPException(status_code=404, detail="Case không tồn tại.")
     meta = json.loads(meta_p.read_text(encoding="utf-8"))
     html_3d = (cdir / "3d.html").read_text(encoding="utf-8")
-    return {"meta": meta, "plot_html": html_3d}
+    verdicts_p = cdir / "verdicts.json"
+    verdicts = json.loads(verdicts_p.read_text(encoding="utf-8")) if verdicts_p.exists() else {}
+    return {"meta": meta, "plot_html": html_3d, "verdicts": verdicts}
+
+
+@app.post("/api/case/{case_id}/verdict")
+async def case_verdict(case_id: str, payload: dict):
+    """Persist doctor verdict for a single nodule.
+    Body: {nodule_id: int, verdict: 'accepted'|'rejected'|null, reason?: str}
+    """
+    cdir = RESULTS_DIR / case_id
+    if not (cdir / "meta.json").exists():
+        raise HTTPException(status_code=404, detail="Case không tồn tại.")
+    nid = payload.get("nodule_id")
+    verdict = payload.get("verdict")  # may be None to clear
+    reason = payload.get("reason", "")
+    if nid is None:
+        raise HTTPException(status_code=400, detail="nodule_id required")
+    vp = cdir / "verdicts.json"
+    data = json.loads(vp.read_text(encoding="utf-8")) if vp.exists() else {}
+    if verdict is None:
+        data.pop(str(nid), None)
+    else:
+        data[str(nid)] = {
+            "verdict": verdict, "reason": reason,
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    vp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"ok": True, "verdicts": data}
 
 
 @app.delete("/api/case/{case_id}")

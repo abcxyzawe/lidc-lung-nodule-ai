@@ -25,23 +25,30 @@ function lungRadsClass(category?: string): string {
   return "bg-red-100 text-red-700"; // 4A/4B/4X
 }
 
+type ServerVerdict = { verdict: Verdict; reason?: string; ts?: string };
+
 export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: string }) {
   const [verdicts, setVerdicts] = useState<Record<number, Verdict>>({});
-  const storageKey = `nodule-verdicts:${caseId}`;
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) setVerdicts(JSON.parse(raw));
-    } catch {}
-  }, [storageKey]);
+    fetch(`http://127.0.0.1:8081/api/case/${caseId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const sv = (d.verdicts ?? {}) as Record<string, ServerVerdict>;
+        const out: Record<number, Verdict> = {};
+        Object.entries(sv).forEach(([k, v]) => { out[Number(k)] = v.verdict; });
+        setVerdicts(out);
+      })
+      .catch(() => {});
+  }, [caseId]);
 
   function setVerdict(id: number, v: Verdict) {
-    setVerdicts((prev) => {
-      const next = { ...prev, [id]: v };
-      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
-      return next;
-    });
+    setVerdicts((prev) => ({ ...prev, [id]: v }));
+    fetch(`http://127.0.0.1:8081/api/case/${caseId}/verdict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodule_id: id, verdict: v ?? null }),
+    }).catch(() => {});
   }
 
   return (

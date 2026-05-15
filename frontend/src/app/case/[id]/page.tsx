@@ -185,8 +185,7 @@ export default function CasePage() {
         </Card>
 
         <footer className="pt-8 text-center text-xs text-muted-foreground">
-          AI hỗ trợ tầm soát — KHÔNG thay thế chẩn đoán bác sĩ ·
-          UNet++ B5 ensemble + Lungmask R231 · F1 detection 0.66 · Trained on LIDC-IDRI
+          AI hỗ trợ tầm soát — KHÔNG thay thế chẩn đoán bác sĩ
         </footer>
       </main>
     </>
