@@ -12,11 +12,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import type { Nodule } from "@/lib/types";
+import type { Nodule, ModelKey } from "@/lib/types";
 import { NoduleThumb } from "@/components/nodule-thumb";
 import { Check, X } from "lucide-react";
 
-type Verdict = "accepted" | "rejected" | undefined;
+type Verdict = "accept" | "reject" | "review" | undefined;
 
 function lungRadsClass(category?: string): string {
   if (!category) return "";
@@ -27,7 +27,15 @@ function lungRadsClass(category?: string): string {
 
 type ServerVerdict = { verdict: Verdict; reason?: string; ts?: string };
 
-export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: string }) {
+export function FindingsTable({
+  nodules,
+  caseId,
+  model,
+}: {
+  nodules: Nodule[];
+  caseId: string;
+  model?: ModelKey;
+}) {
   const [verdicts, setVerdicts] = useState<Record<number, Verdict>>({});
 
   useEffect(() => {
@@ -39,7 +47,7 @@ export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: 
         Object.entries(sv).forEach(([k, v]) => { out[Number(k)] = v.verdict; });
         setVerdicts(out);
       })
-      .catch(() => {});
+      .catch((err) => console.error("Verdict load failed:", err));
   }, [caseId]);
 
   function setVerdict(id: number, v: Verdict) {
@@ -48,7 +56,7 @@ export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ nodule_id: id, verdict: v ?? null }),
-    }).catch(() => {});
+    }).catch((err) => console.error("Verdict save failed:", err));
   }
 
   return (
@@ -62,8 +70,14 @@ export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: 
             <TableHead>Loại</TableHead>
             <TableHead>Vị trí</TableHead>
             <TableHead>Lung-RADS</TableHead>
-            <TableHead>Confidence</TableHead>
-            <TableHead>Review</TableHead>
+            {model === "gt" ? (
+              <TableHead>Độ tin cậy GT</TableHead>
+            ) : (
+              <>
+                <TableHead>Confidence</TableHead>
+                <TableHead>Review</TableHead>
+              </>
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -73,8 +87,8 @@ export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: 
               <TableRow
                 key={n.id}
                 className={cn(
-                  v === "accepted" && "bg-emerald-50/60",
-                  v === "rejected" && "bg-muted/40 opacity-60"
+                  v === "accept" && "bg-emerald-50/60",
+                  v === "reject" && "bg-muted/40 opacity-60"
                 )}
               >
                 <TableCell className="font-mono font-bold tabular-nums">{n.id}</TableCell>
@@ -112,59 +126,98 @@ export function FindingsTable({ nodules, caseId }: { nodules: Nodule[]; caseId: 
                     "—"
                   )}
                 </TableCell>
-                <TableCell>
-                  {n.confidence != null ? (
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 w-16 overflow-hidden rounded-full bg-muted">
-                        <div
+                {model === "gt" ? (
+                  <TableCell>
+                    <GtTierBadges n={n} />
+                  </TableCell>
+                ) : (
+                  <>
+                    <TableCell>
+                      {n.confidence != null ? (
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-16 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className={cn(
+                                "h-full",
+                                n.confidence >= 0.85 ? "bg-emerald-500"
+                                : n.confidence >= 0.7 ? "bg-amber-500"
+                                : "bg-red-400"
+                              )}
+                              style={{ width: `${n.confidence * 100}%` }}
+                            />
+                          </div>
+                          <span className="font-mono text-xs tabular-nums">
+                            {(n.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      ) : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant={v === "accept" ? "default" : "outline"}
                           className={cn(
-                            "h-full",
-                            n.confidence >= 0.85 ? "bg-emerald-500"
-                            : n.confidence >= 0.7 ? "bg-amber-500"
-                            : "bg-red-400"
+                            "h-7 px-2",
+                            v === "accept" && "bg-emerald-600 hover:bg-emerald-700"
                           )}
-                          style={{ width: `${n.confidence * 100}%` }}
-                        />
+                          onClick={() => setVerdict(n.id, v === "accept" ? undefined : "accept")}
+                          title="Confirm là nodule thật"
+                        >
+                          <Check className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={v === "reject" ? "default" : "outline"}
+                          className={cn(
+                            "h-7 px-2",
+                            v === "reject" && "bg-red-600 hover:bg-red-700"
+                          )}
+                          onClick={() => setVerdict(n.id, v === "reject" ? undefined : "reject")}
+                          title="Reject là false positive"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
                       </div>
-                      <span className="font-mono text-xs tabular-nums">
-                        {(n.confidence * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                  ) : "—"}
-                </TableCell>
-                <TableCell>
-                  <div className="flex gap-1">
-                    <Button
-                      size="sm"
-                      variant={v === "accepted" ? "default" : "outline"}
-                      className={cn(
-                        "h-7 px-2",
-                        v === "accepted" && "bg-emerald-600 hover:bg-emerald-700"
-                      )}
-                      onClick={() => setVerdict(n.id, v === "accepted" ? undefined : "accepted")}
-                      title="Confirm là nodule thật"
-                    >
-                      <Check className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={v === "rejected" ? "default" : "outline"}
-                      className={cn(
-                        "h-7 px-2",
-                        v === "rejected" && "bg-red-600 hover:bg-red-700"
-                      )}
-                      onClick={() => setVerdict(n.id, v === "rejected" ? undefined : "rejected")}
-                      title="Reject là false positive"
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </TableCell>
+                    </TableCell>
+                  </>
+                )}
               </TableRow>
             );
           })}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+function GtTierBadges({ n }: { n: Nodule }) {
+  const readers = n.n_readers ?? 0;
+  const readerBadge =
+    readers >= 3 ? (
+      <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 font-medium text-[10px]">
+        ≥3 bác sĩ đọc
+      </Badge>
+    ) : (
+      <Badge className="bg-muted text-muted-foreground hover:bg-muted font-medium text-[10px]">
+        {readers}/4 bác sĩ
+      </Badge>
+    );
+
+  const malignantBadge =
+    n.malignant === true ? (
+      <Badge className="bg-red-100 text-red-700 hover:bg-red-100 font-medium text-[10px]">
+        Nghi ác tính
+        {n.malignancy_score != null
+          ? ` (${n.malignancy_score.toFixed(1)}/5)`
+          : ""}
+      </Badge>
+    ) : null;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {readerBadge}
+      {malignantBadge}
     </div>
   );
 }

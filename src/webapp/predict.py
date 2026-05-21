@@ -158,6 +158,39 @@ def predict_fpr_for_nodules(volume_hu: np.ndarray, nodules: list) -> list:
     return nodules
 
 
+def nms_merge_duplicates(nodules: list, voxel_sp_zyx: tuple, overlap_factor: float = 0.7) -> list:
+    """Merge over-segmented nodules: drop those whose centroid is within
+    overlap_factor * max(diam_i, diam_j) of a higher-confidence nodule.
+
+    overlap_factor is a centroid-distance fraction relative to the larger
+    diameter — NOT a true IoU value.  Sorts by confidence descending, then
+    greedily keeps a nodule only if its centroid (in mm) is farther than
+    overlap_factor * max_diameter from every already-kept nodule.
+    Returns filtered list.
+
+    Nodules missing 'confidence' key fall back to 0.0.
+    """
+    if len(nodules) < 2:
+        return nodules
+    sorted_n = sorted(nodules, key=lambda n: -n.get("confidence", 0.0))
+    sp = np.array(voxel_sp_zyx, dtype=np.float64)
+    kept: list = []
+    for cand in sorted_n:
+        cand_c = np.array(cand["centroid_zyx_voxel"], dtype=np.float64) * sp
+        cand_d = cand["diameter_mm"]
+        merged = False
+        for k in kept:
+            k_c = np.array(k["centroid_zyx_voxel"], dtype=np.float64) * sp
+            dist = float(np.linalg.norm(cand_c - k_c))
+            max_d = max(cand_d, k["diameter_mm"])
+            if dist < overlap_factor * max_d:
+                merged = True
+                break
+        if not merged:
+            kept.append(cand)
+    return kept
+
+
 def normalize(x):
     x = np.clip(x.astype(np.float32), HU_LO, HU_HI)
     return (x - HU_LO) / (HU_HI - HU_LO)
@@ -390,6 +423,53 @@ def render_nodule_thumb(volume_hu: np.ndarray, nodule: dict, out_path: Path,
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     pim.save(out_path, format="PNG", optimize=True)
+
+
+def render_nodule_thumb_gt(volume_hu: np.ndarray, nodule: dict, out_path: Path,
+                           tile: int = 320, hu_window=(-1000, 200)) -> None:
+    """3-panel axial montage (zmin, mid, zmax) with bbox — for GT review.
+
+    Wider context, larger tiles, label "z=N" per panel.
+    """
+    H, W = volume_hu.shape[1], volume_hu.shape[2]
+    zmin, ymin, xmin, zmax, ymax, xmax = nodule["bbox_zyx_voxel"]
+    Z = volume_hu.shape[0]
+    z_mid = (zmin + zmax) // 2
+    # 3 representative slices; if bbox is single-slice, replicate
+    if zmax - zmin >= 3:
+        z_list = [zmin, z_mid, max(zmin, zmax - 1)]
+    else:
+        z_list = [max(0, z_mid - 2), z_mid, min(Z - 1, z_mid + 2)]
+    z_list = [max(0, min(Z - 1, z)) for z in z_list]
+
+    crop_h = max(200, (ymax - ymin) + 100)
+    crop_w = max(200, (xmax - xmin) + 100)
+    cy_mid = (ymin + ymax) // 2
+    cx_mid = (xmin + xmax) // 2
+    y0 = max(0, cy_mid - crop_h // 2); y1 = min(H, y0 + crop_h)
+    x0 = max(0, cx_mid - crop_w // 2); x1 = min(W, x0 + crop_w)
+    if y1 == H: y0 = max(0, H - crop_h)
+    if x1 == W: x0 = max(0, W - crop_w)
+
+    panels = []
+    for z in z_list:
+        sl = volume_hu[z, y0:y1, x0:x1].astype(np.float32)
+        img = np.clip(sl, hu_window[0], hu_window[1])
+        img = ((img - hu_window[0]) / (hu_window[1] - hu_window[0]) * 255).astype(np.uint8)
+        pim = Image.fromarray(img, mode="L").convert("RGB").resize((tile, tile))
+        sx = tile / (x1 - x0); sy = tile / (y1 - y0)
+        bx0 = (xmin - x0) * sx; by0 = (ymin - y0) * sy
+        bx1 = (xmax - x0) * sx; by1 = (ymax - y0) * sy
+        draw = ImageDraw.Draw(pim)
+        draw.rectangle([bx0, by0, bx1, by1], outline=(80, 220, 120), width=3)
+        draw.text((8, 8), f"z={z}", fill=(255, 255, 255))
+        panels.append(pim)
+
+    montage = Image.new("RGB", (tile * 3 + 4, tile), (0, 0, 0))
+    for i, p in enumerate(panels):
+        montage.paste(p, (i * (tile + 2), 0))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    montage.save(out_path, format="PNG", optimize=True)
 
 
 def filter_subpleural(nodules: list, lung_mask: np.ndarray, voxel_sp: tuple,

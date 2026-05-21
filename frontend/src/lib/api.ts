@@ -1,4 +1,4 @@
-import type { AnalyzeResponse, CaseDetail, CaseListItem } from "./types";
+import type { AnalyzeResponse, CaseDetail, CaseListItem, TrainingMetrics } from "./types";
 
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8081";
@@ -22,14 +22,15 @@ export async function deleteCase(id: string): Promise<void> {
 
 export function uploadAndAnalyze(
   files: FileList,
+  model: "mine" | "monai" | "gt",
   onUploadProgress: (loaded: number, total: number) => void
 ): Promise<AnalyzeResponse> {
   return new Promise((resolve, reject) => {
     const fd = new FormData();
     for (const f of Array.from(files)) {
-      // @ts-expect-error webkitRelativePath exists on directory uploads
-      fd.append("files", f, f.webkitRelativePath || f.name);
+      fd.append("files", f, (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name);
     }
+    fd.append("model", model);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_URL}/api/analyze`);
     xhr.upload.onprogress = (e) => {
@@ -42,6 +43,12 @@ export function uploadAndAnalyze(
     xhr.onerror = () => reject(new Error("Network error"));
     xhr.send(fd);
   });
+}
+
+export async function getTrainingMetrics(): Promise<TrainingMetrics> {
+  const res = await fetch(`${API_URL}/api/training-metrics`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load training metrics: ${res.status}`);
+  return res.json();
 }
 
 export function streamProgress(

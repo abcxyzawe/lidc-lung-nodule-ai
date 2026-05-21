@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { deleteCase, getCase } from "@/lib/api";
 import { toast } from "sonner";
 import type { CaseDetail } from "@/lib/types";
+import { MODEL_META } from "@/lib/model-meta";
 
 export default function CasePage() {
   const router = useRouter();
@@ -82,9 +83,17 @@ export default function CasePage() {
         </Link>
 
         <header>
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{meta.name}</h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">{meta.name}</h1>
+            {(() => {
+              const mm = MODEL_META[(meta.model ?? "mine")];
+              return <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${mm.badgeClass}`}>{mm.label}</span>;
+            })()}
+          </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            AI hỗ trợ tầm soát · {total} candidate · ~{minutesSaved} phút tiết kiệm so với scroll thủ công
+            {meta.model === "gt"
+              ? `Đáp án LIDC-IDRI · ${total} nodule annotated`
+              : `AI hỗ trợ tầm soát · ${total} candidate · ~${minutesSaved} phút tiết kiệm`}
           </p>
         </header>
 
@@ -119,25 +128,45 @@ export default function CasePage() {
           </div>
         </div>
 
+        {meta.model === "mine" && meta.model_confidence_warning && (
+          <div className="my-4 rounded-lg border border-red-300 bg-red-50 p-4">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">⚠️</span>
+              <div>
+                <div className="font-semibold text-red-700">
+                  Mô hình của mình không tự tin trên case này
+                </div>
+                <div className="mt-1 text-sm text-red-600">
+                  {reasonMessage(meta.low_pred_reason)}
+                  Vui lòng tham khảo kết quả <strong>MONAI RetinaNet</strong> hoặc{" "}
+                  <strong>Ground truth (LIDC)</strong> để có cái nhìn đầy đủ hơn.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-5">
           <Stat label="slices CT" value={meta.n_slices} />
           <Stat label="nodule" value={total} />
           <Stat label="LR-4 (đáng nghi)" value={nLR4} color="red" />
           <Stat label="LR-3 (theo dõi)" value={nLR3} color="amber" />
-          <Stat label="AI infer" value={`${meta.timing_sec.ai_predict.toFixed(1)}s`} />
+          <Stat label="AI infer" value={`${(meta.timing_sec.ai_predict ?? meta.timing_sec.monai_predict ?? meta.timing_sec.gt_load ?? 0).toFixed(1)}s`} />
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">3D phổi + nodule</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Vỏ phổi xanh trong suốt, nodule màu đặc. Click legend để bật/tắt từng cái.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <Plot3D html={plot_html} />
-          </CardContent>
-        </Card>
+        {meta.model !== "gt" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">3D phổi + nodule</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Vỏ phổi xanh trong suốt, nodule màu đặc. Click legend để bật/tắt từng cái.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <Plot3D html={plot_html} />
+            </CardContent>
+          </Card>
+        )}
 
         {meta.nodules.length > 0 && (
           <Card>
@@ -151,7 +180,7 @@ export default function CasePage() {
               </p>
             </CardHeader>
             <CardContent>
-              <FindingsTable nodules={meta.nodules} caseId={id} />
+              <FindingsTable nodules={meta.nodules} caseId={id} model={meta.model} />
               <p className="mt-4 text-sm text-muted-foreground">
                 <strong>Confidence:</strong> trung bình xác suất AI trong vùng nodule.
                 <strong> Lung-RADS:</strong> chuẩn ACR v2022 dựa trên đường kính (rule, không phải AI).
@@ -171,11 +200,11 @@ export default function CasePage() {
                 <TechRow k="Voxel spacing (z, y, x)" v={meta.voxel_spacing_zyx_mm.map((x) => x.toFixed(2)).join(", ") + " mm"} />
                 <TechRow k="Voxel phổi (lungmask R231)" v={meta.lung_voxels.toLocaleString()} />
                 <TechRow k="Voxel pred (∩ phổi)" v={meta.pred_voxels.toLocaleString()} />
-                <TechRow k="Đọc DICOM" v={`${meta.timing_sec.read_dicom.toFixed(2)} s`} />
-                <TechRow k="Lung segmentation" v={`${meta.timing_sec.lung_seg.toFixed(2)} s`} />
-                <TechRow k="Nodule segmentation (B5 + TTA + ensemble)" v={`${meta.timing_sec.ai_predict.toFixed(2)} s`} />
-                <TechRow k="Connected components + filters" v={`${meta.timing_sec.postprocess.toFixed(2)} s`} />
-                <TechRow k="Render Plotly Mesh3d" v={`${meta.timing_sec.render_3d.toFixed(2)} s`} />
+                <TechRow k="Đọc DICOM" v={`${(meta.timing_sec.read_dicom ?? 0).toFixed(2)} s`} />
+                <TechRow k="Lung segmentation" v={`${(meta.timing_sec.lung_seg ?? 0).toFixed(2)} s`} />
+                <TechRow k="Nodule inference" v={`${(meta.timing_sec.ai_predict ?? meta.timing_sec.monai_predict ?? meta.timing_sec.gt_load ?? 0).toFixed(2)} s`} />
+                <TechRow k="Connected components + filters" v={`${(meta.timing_sec.postprocess ?? 0).toFixed(2)} s`} />
+                <TechRow k="Render Plotly Mesh3d" v={`${(meta.timing_sec.render_3d ?? 0).toFixed(2)} s`} />
               </TableBody>
             </Table>
             <Button onClick={onDelete} variant="outline" className="mt-4 border-red-300 text-red-600 hover:bg-red-50 hover:text-red-700">
@@ -190,6 +219,16 @@ export default function CasePage() {
       </main>
     </>
   );
+}
+
+function reasonMessage(reason?: string | null): string {
+  if (reason === "no_candidate")
+    return "Pipeline phát hiện 0 candidate. ";
+  if (reason === "low_pred_voxels")
+    return "Segmentation model dự đoán quá ít voxel — có thể là distribution shift. ";
+  if (reason === "no_candidate_and_low_pred_voxels")
+    return "Cả segmentation và detection đều không có output. ";
+  return "Model không tự tin với case này. ";
 }
 
 function Stat({

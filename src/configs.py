@@ -8,7 +8,7 @@ from pathlib import Path
 # ROOT can be overridden by env var LIDC_ROOT (e.g. /workspace on remote).
 # Default: Windows local path.
 import os as _os
-ROOT       = Path(__os.environ.get("LIDC_ROOT", r"E:/Phan Tich Ung Thu"))
+ROOT       = Path(_os.environ.get("LIDC_ROOT", r"E:/Phan Tich Ung Thu"))
 DICOM_ROOT = ROOT / "manifest-1600709154662" / "LIDC-IDRI"
 XML_ROOT   = ROOT / "tcia-lidc-xml"
 WORK       = ROOT / "work"

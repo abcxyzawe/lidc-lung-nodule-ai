@@ -1,0 +1,218 @@
+# LIDC Lung Nodule Detection — Handoff Context
+
+File này tóm tắt mọi thứ ChatGPT/AI khác cần biết để hỗ trợ tiếp project.
+
+## Mục tiêu
+
+Hệ thống AI hỗ trợ bác sĩ tầm soát nodule phổi trên CT scan. Input DICOM folder → output:
+- 3D segmentation nodules
+- Phân loại malignancy
+- Đánh giá Brock score + Lung-RADS
+- Doctor confirm/reject từng nodule (persist verdict cho active learning sau này)
+
+## Stack
+
+- **Segmentation**: UNet++ EfficientNet-B5 SCSE 2.5D (in_channels=3)
+- **FPR (False Positive Reduction)**: DenseNet121-3D, patches 48³
+- **Lung mask**: lungmask R231 (Hofmanninger 2020)
+- **Frontend**: Next.js 16 + React 19 + Tailwind v4 + shadcn
+- **Backend**: FastAPI + uvicorn
+- **Training**: PyTorch 2.5.1+cu121, MONAI (Tversky/DiceFocal losses), segmentation_models_pytorch
+
+## Kết quả hiện tại (test_panel locked, 99 patients / 250 nodules)
+
+| Pipeline | Sens | Prec | F1 | FP/scan |
+|---|---|---|---|---|
+| Baseline + FPR v2 (cũ) | 0.891 | 0.352 | 0.505 | 3.18 |
+| **Stage2 + FPR v3 (WINNER)** | 0.787 | 0.509 | **0.618** | 1.46 |
+| Δ | -0.10 | +0.16 | **+22% rel** | **-54%** |
+
+**Winner config**: cons2 mask (≥2/4 radiologists) + Tversky α=0.3 β=0.7 + v1 data + 180ep + SWA. FPR threshold 0.85 on val.
+
+## Layout repo
+
+```
+E:/Phan Tich Ung Thu/
+├── src/
+│   ├── webapp/
+│   │   ├── app.py              # FastAPI server, port 8081
+│   │   ├── predict.py          # Model inference + 3D render
+│   │   ├── clinical.py         # Brock/Lung-RADS scoring
+│   │   ├── results/{case_id}/  # Outputs: 3d.html, meta.json, verdicts.json, thumbs/
+│   │   └── uploads/            # Temp upload zone
+│   ├── configs.py              # HU_LO/HI, MIN_NODULE_VOXELS, paths
+│   ├── panels.py               # train/val/test splits loader
+│   ├── benchmark.py            # GT loader from LIDC XML
+│   ├── experiments.py          # All training experiment configs
+│   ├── train_experiment.py     # Generic exp trainer
+│   ├── dataset_v2.py           # Dataset class + sampler + make_loss
+│   ├── eval_experiment.py      # Eval pipeline on val+test panels
+│   ├── tune_detection_params.py # Sweep blob params on val
+│   ├── apply_config_on_panel.py # Apply best_config on cached probs
+│   ├── retrain_fpr_pipeline.py # End-to-end FPR retrain (cache→extract→train→eval)
+│   ├── extract_fpr_candidates.py
+│   ├── train_fpr_classifier.py
+│   ├── apply_fpr_classifier.py
+│   ├── cache_panel_probs.py
+│   ├── aggregate_verdicts.py   # Doctor verdicts → feedback dataset
+│   ├── pull_winner.py          # Idempotent VPS→local sync
+│   ├── vps_helper.py           # paramiko SSH wrapper (env: LIDC_VPS_*)
+│   └── freeze_baseline.py
+├── frontend/
+│   ├── src/app/page.tsx        # Home
+│   ├── src/app/case/[id]/page.tsx # Case detail
+│   ├── src/components/
+│   │   ├── findings-table.tsx  # Verdict UI (POST to backend)
+│   │   ├── plot-3d.tsx         # iframe wrapper for plotly HTML
+│   │   ├── nodule-spotlight.tsx
+│   │   ├── nodule-thumb.tsx
+│   │   ├── upload-form.tsx
+│   │   ├── topbar.tsx
+│   │   └── verdict-banner.tsx
+│   └── package.json            # npm run dev → port 3000
+├── work/
+│   ├── runs/                   # best.pt, last.pt, swa.pt, fpr.pt (webapp loads)
+│   ├── runs_exp/stage2_full/   # Winner training output
+│   ├── academic/
+│   │   ├── PROJECT_REPORT_FULL.md  # Full eval results
+│   │   ├── TUNING_SUMMARY.md
+│   │   ├── best_config.json    # Detection post-processing params
+│   │   └── feedback_dataset.json   # (created by aggregate_verdicts.py)
+│   ├── preprocessed/           # 1010 patient h5 files (~13GB)
+│   ├── splits.json             # train/val/test (812/99/99)
+│   └── sop_index.json
+└── .gitattributes              # LFS tracks *.pt
+```
+
+## Cách team chạy app local
+
+```bash
+git clone https://github.com/abcxyzawe/lidc-lung-nodule-ai.git
+cd lidc-lung-nodule-ai
+git lfs pull          # Tải ckpts (~292MB)
+
+# Copy ckpts về work/runs/ (webapp load từ đó)
+cp work/runs_exp/stage2_full/best.pt work/runs/best.pt
+cp work/runs_exp/stage2_full/best.pt work/runs/last.pt   # webapp load last.pt
+cp work/runs_exp/stage2_full/swa.pt  work/runs/swa.pt
+cp work/runs/fpr_v3_stage2winner.pt  work/runs/fpr.pt
+
+# Install + run backend
+pip install fastapi uvicorn paramiko segmentation-models-pytorch monai \
+    h5py scipy scikit-learn lungmask plotly pylidc pydicom
+cd src/webapp && PYTHONIOENCODING=utf-8 python app.py
+# → http://127.0.0.1:8081
+
+# Frontend (separate terminal)
+cd frontend && npm install && npm run dev
+# → http://127.0.0.1:3000
+```
+
+## API endpoints (FastAPI port 8081)
+
+- `GET /api/health` → `{status: "ok"}`
+- `GET /api/cases` → list các case đã analyze
+- `POST /api/analyze` → upload DICOM ZIP/folder, trả case_id, stream events
+- `GET /api/events/{case_id}` → SSE progress stream
+- `GET /api/case/{case_id}` → trả meta + plot_html + verdicts
+- `POST /api/case/{case_id}/verdict` → body `{nodule_id, verdict, reason?}` lưu doctor verdict
+- `DELETE /api/case/{case_id}` → xoá case
+
+## Workflow lịch sử (tóm tắt cho hiểu)
+
+1. **Phase đầu (30h GPU)**: pilot 6 experiments (exp00-exp05) → train stage2_full v1 data → retrain FPR v3 → F1=0.606.
+2. **Big Swing v2-NaN fix (14h GPU, failed)**: thử train stage2 với v2 data (full-CT slices) + smooth_dr=1.0 patch trong loss. Smoke pass nhưng full train val_dice không vượt baseline. Killed sớm theo recovery rule.
+3. **3-phase optimization (5h GPU)**:
+   - Re-tune detection params: F1 seg-only +0.019 (PROMOTED).
+   - TTA4 + 3-ckpt ensemble: F1 -0.019 (NEGATIVE).
+   - 5-slice retrain: val_dice 0.8757 cao hơn nhưng test F1=0.518 thấp hơn (NEGATIVE — val_dice không correlate F1).
+4. **Hard-negative mining (in-progress khi VPS chết)**: chưa kịp hoàn thành.
+5. **VPS bị xoá ngày 2026-05-14** — mất 50h GPU work + tất cả ckpts vì chưa pull về local. Lesson: phải auto-pull ngay sau mỗi milestone.
+6. **Recovery run (6h GPU, 2026-05-15)**: re-train winner config trên VPS mới → F1=0.618 (cao hơn 0.606 lần đầu nhờ val_dice variance). Đã pull về local + push Git LFS.
+
+## Bugs đã fix (đáng nhớ)
+
+- `predict.py::render_3d_html`: sau khi `app.py` renumber `nodules[].id` theo confidence, mất sync với `labeled_pred` array → 3D mesh empty. Fix: lưu `original_id` + dùng nó.
+- `app.py::_emit`: print tiếng Việt → cp1252 cannot encode → 500 error. Fix: `PYTHONIOENCODING=utf-8`.
+- `findings-table.tsx`: verdict chỉ lưu localStorage → đóng tab mất. Fix: POST API + persist `verdicts.json` per case.
+- `dataset_v2.py::make_loss`: MONAI TverskyLoss default `smooth_dr=1e-5` → AMP fp16 + pure-neg slices → NaN. Fix: `smooth_nr=1.0, smooth_dr=1.0, batch=True`.
+- `tta_ensemble_eval.py`: z-score normalize blew up trên empty slices → NaN cache. Fix: HU clipping normalize giống `eval_experiment.py`.
+
+## Next steps team có thể làm
+
+### Easy wins (không cần GPU)
+- Improve UI: thêm reason text input cho reject, export verdicts CSV
+- Better error handling khi upload sai format DICOM
+- Add patient demographics input (Brock score cần age/smoking history)
+
+### Medium (cần GPU vài giờ)
+- **Active learning**: gọi `python src/aggregate_verdicts.py` → check số "hard FP" (rejected nhưng FPR>0.5) và "hard TP" (accepted nhưng FPR<0.5). Khi ≥50 verdicts → kích retrain FPR với augmented set.
+- **Multi-doctor verdicts**: cho phép nhiều bác sĩ verdict trên cùng case, agreement metric.
+
+### Hard (cần GPU nhiều ngày)
+- Solve v2 NaN cho thật triệt để → unlock full-CT training
+- Larger encoder (B7) hoặc 3D UNet thay vì 2.5D
+- Test trên dataset khác (LUNA16 official, NLST)
+
+## Câu hỏi team có thể hỏi ChatGPT
+
+- "Làm sao deploy backend này lên server (Docker, gunicorn)?"
+- "Add authentication cho webapp" (hiện chưa có)
+- "Tích hợp với PACS/HIS hospital workflow"
+- "Tối ưu inference speed (hiện ~60s/CT 266 slices trên V100)"
+- "Convert sang ONNX/TensorRT để chạy không cần PyTorch"
+
+---
+
+**Repo**: https://github.com/abcxyzawe/lidc-lung-nodule-ai
+**Winner ckpts**: trong Git LFS, pull bằng `git lfs pull`.
+**Backend**: port 8081. **Frontend**: port 3000.
+
+---
+
+==============================================================
+AUDIT 3-MODE AI — 2026-05-21 — 13 FIX APPLIED
+==============================================================
+
+3 LỰA CHỌN AI:
+  1. "mine"  — Stage2+FPR_v3 (F1=0.618), winner ckpt last.pt + fpr.pt(best_thr=0.85)
+  2. "monai" — MONAI RetinaNet 3D, bundle tại bundles/lung_nodule_ct_detection/
+  3. "gt"    — Ground truth từ tcia-lidc-xml/ (4 readers consensus)
+
+OUTPUT SCHEMA CHUNG (cả 3 mode):
+  id, original_id, bbox_zyx_voxel, centroid_zyx_voxel, diameter_mm,
+  confidence, fpr_prob, nodule_type, upper_lobe, lung_rads
+
+THÊM CHO GT MODE:
+  n_readers: int           — số radiologist annotate cluster này
+  confidence_tier: "high"|"low" — "high" nếu ≥3/4 readers
+  malignancy_score: float|null  — average qua readers
+  malignant: bool|null     — true nếu score ≥4.0 (LIDC convention)
+
+API CHANGES:
+  POST /api/analyze → có thể trả HTTP 503 nếu:
+    - model=monai và bundle missing
+    - model=gt và tcia-lidc-xml/ missing
+  POST /api/case/{id}/verdict → verdict phải ∈ {accept,reject,review,null}
+    invalid → HTTP 400
+
+SECURITY HARDENING:
+  - Upload: path traversal guard (resolve+is_relative_to)
+  - Upload: zip-slip guard (per-member validate)
+  - SSE: không leak FileNotFoundError absolute path
+  - Verdict: server-side allowlist
+
+DEFERRED (tech-debt):
+  F-2: GT cluster_mm=8.0 (LIDC convention 5.0) — revisit trước paper
+  F-8: UX polish (disable unavailable model button, history filter)
+
+LOCKED ARTIFACTS — KHÔNG đụng:
+  - Winner ckpt commit cd48359
+  - Stage2 pipeline commit d005223
+  - bundles/, manifest-1600709154662/
+
+FILES MODIFIED:
+  src/webapp/{app.py, predict_monai.py, load_gt.py}
+  frontend/src/{lib/types.ts, lib/api.ts, lib/model-meta.ts (new),
+                components/findings-table.tsx, app/case/[id]/page.tsx,
+                components/history-list.tsx, components/upload-form.tsx}

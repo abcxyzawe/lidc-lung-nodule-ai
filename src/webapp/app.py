@@ -16,10 +16,12 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+import predict as _predict_module
 from predict import (
     clean_mask,
     filter_subpleural,
     find_nodules,
+    nms_merge_duplicates,
     predict_fpr_for_nodules,
     get_malignancy_model,
     get_model,
@@ -30,6 +32,7 @@ from predict import (
     read_dicom_series,
     render_3d_html,
     render_nodule_thumb,
+    render_nodule_thumb_gt,
     segment_lung,
 )
 from clinical import (
@@ -87,6 +90,7 @@ def _list_cases():
         items.append({
             "id": c.name,
             "name": m.get("name", c.name),
+            "model": m.get("model", "mine"),
             "n_nodules": m.get("n_nodules", 0),
             "n_slices": m.get("n_slices", 0),
             "ts": m.get("timestamp", ""),
@@ -107,16 +111,44 @@ def list_cases():
 # In-memory progress log per case_id. Each entry is (pct, message).
 PROGRESS: dict[str, list[tuple[int, str]]] = {}
 
+# Allowlist for doctor verdict values (None = clear verdict)
+ALLOWED_VERDICTS: frozenset = frozenset({"accept", "reject", "review"})
+
 
 def _emit(case_id: str, pct: int, msg: str):
     PROGRESS.setdefault(case_id, []).append((pct, msg))
-    print(f"[{case_id}] {pct}% {msg}", flush=True)
-
-
-def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
-    """Heavy synchronous work — runs in a thread to keep event loop free."""
+    # F-40: Windows-safe print — fallback if console encoding is not UTF-8 (e.g. cp1252)
     try:
-        _emit(case_id, 5, f"Bắt đầu xử lý {len(dcm_paths)} file DICOM")
+        print(f"[{case_id}] {pct}% {msg}", flush=True)
+    except UnicodeEncodeError:
+        safe = msg.encode("ascii", errors="replace").decode("ascii")
+        print(f"[{case_id}] {pct}% {safe}", flush=True)
+
+
+def _build_synthetic_labeled(vol_shape, nodules):
+    """Fill spherical masks inside each nodule bbox for visualization (MONAI/GT).
+    Returns labeled volume (int) where nid==original_id."""
+    import numpy as np
+    labeled = np.zeros(vol_shape, dtype=np.int32)
+    for n in nodules:
+        nid = n.get("original_id", n["id"])
+        zmin, ymin, xmin, zmax, ymax, xmax = n["bbox_zyx_voxel"]
+        zmin = max(0, int(zmin))
+        ymin = max(0, int(ymin))
+        xmin = max(0, int(xmin))
+        zmax = min(vol_shape[0], int(zmax))
+        ymax = min(vol_shape[1], int(ymax))
+        xmax = min(vol_shape[2], int(xmax))
+        if zmax <= zmin or ymax <= ymin or xmax <= xmin:
+            continue  # degenerate bbox, skip
+        labeled[zmin:zmax, ymin:ymax, xmin:xmax] = nid
+    return labeled
+
+
+def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str, model: str = "mine"):
+    """Heavy synchronous work. model: 'mine' | 'monai' | 'gt'."""
+    try:
+        _emit(case_id, 5, f"Bắt đầu xử lý {len(dcm_paths)} file DICOM [model={model}]")
         t = {}
         t0 = time.time(); vol, voxel_sp = read_dicom_series(dcm_paths); t["read_dicom"] = time.time() - t0
         _emit(case_id, 15, f"Đọc DICOM xong ({t['read_dicom']:.1f}s) — volume {vol.shape}, spacing {voxel_sp}")
@@ -124,66 +156,101 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
         t0 = time.time(); lung = segment_lung(vol); t["lung_seg"] = time.time() - t0
         _emit(case_id, 25, f"Phân vùng phổi xong ({t['lung_seg']:.1f}s) — {int(lung.sum()):,} voxel phổi")
 
-        N = vol.shape[0]
-        last_emit = [0.0]
-        def progress_cb(i, total):
-            now = time.time()
-            if now - last_emit[0] > 0.5:
-                pct = 25 + int(55 * i / max(total, 1))  # 25 -> 80 during AI
-                _emit(case_id, pct, f"AI đang infer slice {i+1}/{total}")
-                last_emit[0] = now
-        t0 = time.time()
-        prob_vol, pred = predict_nodules(vol, threshold=0.97, tta=True, ensemble=True,
-                                         progress=progress_cb)
-        t["ai_predict"] = time.time() - t0
-        _emit(case_id, 80, f"AI inference xong ({t['ai_predict']:.1f}s, ensemble best+swa) — pred {int(pred.sum()):,} voxel")
+        # ---- Model branch ----
+        if model == "monai":
+            _emit(case_id, 30, "Chạy MONAI RetinaNet 3D (LUNA16 pretrained)...")
+            from predict_monai import predict_nodules_monai
+            t0 = time.time()
+            nodules = predict_nodules_monai(vol, tuple(float(s) for s in voxel_sp))
+            t["monai_predict"] = time.time() - t0
+            _emit(case_id, 80, f"MONAI xong ({t['monai_predict']:.1f}s) — {len(nodules)} bbox")
+            prob_vol = None
+            pred = (lung & 0).astype("uint8")  # dummy empty
+            labeled = _build_synthetic_labeled(vol.shape, nodules)
+        elif model == "gt":
+            _emit(case_id, 30, "Đang load ground truth từ LIDC XML...")
+            from load_gt import load_gt_for_upload
+            t0 = time.time()
+            nodules = load_gt_for_upload(dcm_paths, vol.shape, tuple(float(s) for s in voxel_sp))
+            t["gt_load"] = time.time() - t0
+            if not nodules:
+                _emit(case_id, 80, "Upload không match LIDC patient — không có GT")
+            else:
+                _emit(case_id, 80, f"GT loaded — {len(nodules)} nodule annotated")
+            prob_vol = None
+            pred = (lung & 0).astype("uint8")
+            labeled = _build_synthetic_labeled(vol.shape, nodules)
+        else:
+            # ---- Original "mine" pipeline ----
+            N = vol.shape[0]
+            last_emit = [0.0]
+            def progress_cb(i, total):
+                now = time.time()
+                if now - last_emit[0] > 0.5:
+                    pct = 25 + int(55 * i / max(total, 1))
+                    _emit(case_id, pct, f"AI đang infer slice {i+1}/{total}")
+                    last_emit[0] = now
+            t0 = time.time()
+            prob_vol, pred = predict_nodules(vol, threshold=0.97, tta=True, ensemble=True,
+                                             progress=progress_cb)
+            t["ai_predict"] = time.time() - t0
+            _emit(case_id, 80, f"AI inference xong ({t['ai_predict']:.1f}s, ensemble best+swa) — pred {int(pred.sum()):,} voxel")
 
-        pred = (pred & lung).astype("uint8")
-        _emit(case_id, 81, f"Lọc trong phổi — {int(pred.sum()):,} voxel")
+            pred = (pred & lung).astype("uint8")
+            _emit(case_id, 81, f"Lọc trong phổi — {int(pred.sum()):,} voxel")
+            pred = clean_mask(pred, voxel_sp)
+            _emit(case_id, 82, f"Clean mask — {int(pred.sum()):,} voxel")
 
-        pred = clean_mask(pred, voxel_sp)
-        _emit(case_id, 82, f"Clean mask (closing + opening) — {int(pred.sum()):,} voxel")
+            t0 = time.time()
+            nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=120, max_elongation=4.0,
+                                            prob_volume=prob_vol, core_threshold=0.85)
+            t["postprocess"] = time.time() - t0
+            _emit(case_id, 84, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate")
 
-        t0 = time.time()
-        # Pass prob_vol for tight (core>0.85) diameter measurement
-        nodules, labeled = find_nodules(pred, voxel_sp, min_voxels=120, max_elongation=4.0,
-                                        prob_volume=prob_vol, core_threshold=0.85)
-        t["postprocess"] = time.time() - t0
-        _emit(case_id, 84, f"Tìm nodule ({t['postprocess']:.1f}s) — {len(nodules)} candidate, đo size từ core (prob>0.85)")
+            before = len(nodules)
+            nodules = merge_nearby_nodules(nodules, voxel_sp, max_dist_mm=10.0)
+            if before > len(nodules):
+                _emit(case_id, 85, f"Merge {before - len(nodules)} nodule cùng vùng vật lý")
 
-        before = len(nodules)
-        nodules = merge_nearby_nodules(nodules, voxel_sp, max_dist_mm=10.0)
-        if before > len(nodules):
-            _emit(case_id, 85, f"Merge {before - len(nodules)} nodule cùng vùng vật lý")
+            before = len(nodules)
+            nodules = filter_subpleural(nodules, lung, voxel_sp, min_dist_mm=0.0)
+            if before > len(nodules):
+                _emit(case_id, 86, f"Bỏ {before - len(nodules)} subpleural FP")
 
-        before = len(nodules)
-        nodules = filter_subpleural(nodules, lung, voxel_sp, min_dist_mm=0.0)
-        if before > len(nodules):
-            _emit(case_id, 86, f"Bỏ {before - len(nodules)} subpleural FP")
+            nodules = predict_fpr_for_nodules(vol, nodules)
+            # _FPR_THR is set by get_fpr_model() side-effect during predict_fpr_for_nodules() call above
+            # — read AFTER that call to get live ckpt value (default 0.5 → ckpt 0.85)
+            fpr_thr = _predict_module._FPR_THR
+            before_fpr = len(nodules)
+            # fail-open: nodules with fpr_prob=None (model unavailable) are kept
+            nodules = [n for n in nodules
+                       if (n.get("fpr_prob") is None) or (n["fpr_prob"] >= fpr_thr)]
+            _emit(case_id, 87, f"FPR filter: {len(nodules)}/{before_fpr} candidates (thr={fpr_thr:.2f})")
 
-        # Phase 2: 3D FPR classifier — adds n["fpr_prob"] in [0,1].
-        # Doesn't filter; downstream UI uses it as additional signal.
-        nodules = predict_fpr_for_nodules(vol, nodules)
-        kept_high = sum(1 for n in nodules if (n.get("fpr_prob") or 0) >= 0.5)
-        _emit(case_id, 87, f"FPR classifier: {kept_high}/{len(nodules)} candidates score >= 0.5")
+            before_nms = len(nodules)
+            nodules = nms_merge_duplicates(nodules, voxel_sp)
+            _emit(case_id, 88, f"NMS: {len(nodules)}/{before_nms} unique nodules")
 
-        # Per-nodule descriptors: type, lobe location, Lung-RADS by size
+        # ---- Common per-nodule descriptors (works for mine/monai/gt) ----
         t0 = time.time()
         n_total = vol.shape[0]
         for n in nodules:
-            n["nodule_type"] = detect_nodule_type_from_hu(vol, n["bbox_zyx_voxel"], labeled, n["id"])
+            if model == "mine":
+                n["nodule_type"] = detect_nodule_type_from_hu(vol, n["bbox_zyx_voxel"], labeled, n["id"])
             n["upper_lobe"] = is_upper_lobe(n["centroid_zyx_voxel"][0], n_total)
             n["lung_rads"] = lung_rads(n["diameter_mm"])
-            # Confidence = mean probability inside the core voxels (proxy for AI certainty)
             zmin, ymin, xmin, zmax, ymax, xmax = n["bbox_zyx_voxel"]
-            blob_in_box = (labeled[zmin:zmax, ymin:ymax, xmin:xmax] == n["id"])
-            prob_in_box = prob_vol[zmin:zmax, ymin:ymax, xmin:xmax]
-            if blob_in_box.any():
-                n["confidence"] = float(prob_in_box[blob_in_box].mean())
-            else:
-                n["confidence"] = 0.0
+            if model == "mine" and prob_vol is not None:
+                blob_in_box = (labeled[zmin:zmax, ymin:ymax, xmin:xmax] == n["id"])
+                prob_in_box = prob_vol[zmin:zmax, ymin:ymax, xmin:xmax]
+                if blob_in_box.any():
+                    n["confidence"] = float(prob_in_box[blob_in_box].mean())
+                else:
+                    n["confidence"] = 0.0
+            # else: keep existing confidence (set by MONAI score or GT=1.0)
         # Sort by confidence (highest first) — radiologist reviews top suspects first
-        nodules.sort(key=lambda n: -n["confidence"])
+        # F-39: .get() defensive — monai/gt nodule schema may not have "confidence"
+        nodules.sort(key=lambda n: -n.get("confidence", 0.0))
         # Renumber so #1 is most confident — keep original_id so labeled_pred lookups still work
         for new_id, n in enumerate(nodules, 1):
             n["original_id"] = n["id"]
@@ -191,52 +258,116 @@ def _do_analyze(work: Path, dcm_paths: list, case_id: str, case_label: str):
         t["postprocess_extra"] = time.time() - t0
         _emit(case_id, 92, f"Sort theo confidence — #1 cao nhất {nodules[0]['confidence']*100:.0f}% nếu có" if nodules else "Không có nodule")
 
-        t0 = time.time()
-        html_3d = render_3d_html(
-            lung, pred, voxel_sp, labeled, nodules,
-            title=f"{case_label} — {len(nodules)} nodule(s) detected",
-        )
-        t["render_3d"] = time.time() - t0
-        _emit(case_id, 98, f"Render 3D xong ({t['render_3d']:.1f}s)")
-
         case_dir = RESULTS_DIR / case_id
         case_dir.mkdir(exist_ok=True)
-        (case_dir / "3d.html").write_text(html_3d, encoding="utf-8")
 
-        # Render bbox thumbnails
+        if model == "gt":
+            # GT mode: skip slow 3D render — doctor just needs bbox images
+            (case_dir / "3d.html").write_text(
+                "<div style='padding:40px;text-align:center;color:#666;font-family:sans-serif'>"
+                "Ground truth mode — chỉ hiển thị bbox 2D bên dưới.</div>",
+                encoding="utf-8",
+            )
+            t["render_3d"] = 0.0
+            _emit(case_id, 98, "GT mode — bỏ qua render 3D")
+        else:
+            t0 = time.time()
+            html_3d = render_3d_html(
+                lung, pred, voxel_sp, labeled, nodules,
+                title=f"{case_label} — {len(nodules)} nodule(s) detected",
+            )
+            t["render_3d"] = time.time() - t0
+            _emit(case_id, 98, f"Render 3D xong ({t['render_3d']:.1f}s)")
+            (case_dir / "3d.html").write_text(html_3d, encoding="utf-8")
+
+        # Render bbox thumbnails (3-slice montage for GT, single-slice for others)
+        thumb_fn = render_nodule_thumb_gt if model == "gt" else render_nodule_thumb
         thumbs_dir = case_dir / "thumbs"
         for n in nodules:
             try:
                 fname = f"nodule_{n['id']:04d}.png"
-                render_nodule_thumb(vol, n, thumbs_dir / fname)
+                thumb_fn(vol, n, thumbs_dir / fname)
                 n["thumb_url"] = f"/results-files/{case_id}/thumbs/{fname}"
             except Exception as e:
                 print(f"  thumb gen failed for #{n['id']}: {e}", flush=True)
         _emit(case_id, 99, f"Render {len(nodules)} thumbnail")
+
+        # F-38: pred_voxels only meaningful for "mine" — monai/gt pred is dummy zeros
+        pred_voxels = int(pred.sum()) if model == "mine" else None
+
+        # ---- Under-prediction warning (mine only) ----
+        model_confidence_warning = False
+        low_pred_reason = None
+        if model == "mine":
+            THRESHOLD_LOW_PRED_VOXELS = 5000  # empirical: LIDC-IDRI-0754 had 951 → fail
+            n_nod = len(nodules)
+            low_voxels = pred_voxels < THRESHOLD_LOW_PRED_VOXELS
+            no_candidate = n_nod == 0
+
+            model_confidence_warning = no_candidate or low_voxels
+            if no_candidate and low_voxels:
+                low_pred_reason = "no_candidate_and_low_pred_voxels"
+            elif no_candidate:
+                low_pred_reason = "no_candidate"
+            elif low_voxels:
+                low_pred_reason = "low_pred_voxels"
+
+            if model_confidence_warning:
+                _emit(case_id, 95, f"⚠️ Mô hình under-predict (pred_voxels={pred_voxels}, n_nodules={n_nod}) — khuyến nghị tham khảo MONAI/GT")
+
         meta = {
             "id": case_id, "name": case_label or case_id,
+            "model": model,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "n_slices": int(vol.shape[0]),
             "n_nodules": len(nodules),
             "voxel_spacing_zyx_mm": [float(s) for s in voxel_sp],
             "lung_voxels": int(lung.sum()),
-            "pred_voxels": int(pred.sum()),
+            "pred_voxels": pred_voxels,
+            "model_confidence_warning": model_confidence_warning,
+            "low_pred_reason": low_pred_reason,
             "nodules": nodules,
             "timing_sec": {k: float(v) for k, v in t.items()},
         }
         (case_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         _emit(case_id, 100, "DONE")
-    except Exception as e:
+    except FileNotFoundError:
         import traceback
         traceback.print_exc()
-        _emit(case_id, -1, f"LỖI: {type(e).__name__}: {e}")
+        _emit(case_id, -1, f"Thiếu file cần thiết cho mode {model}. Vui lòng kiểm tra cài đặt server.")
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        _emit(case_id, -1, f"Lỗi không xác định khi xử lý mode {model}.")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 @app.post("/api/analyze")
-async def analyze(files: list[UploadFile] = File(...)):
-    """Save upload, schedule analysis in a thread, return case_id immediately."""
+async def analyze(files: list[UploadFile] = File(...), model: str = Form("mine")):
+    """Save upload, schedule analysis in a thread, return case_id immediately.
+    model: 'mine' | 'monai' | 'gt'
+    """
+    if model not in {"mine", "monai", "gt"}:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
+
+    # Pre-flight: verify required artifacts exist before spawning any thread.
+    PROJECT_ROOT = WEBAPP_DIR.parent.parent
+    if model == "monai":
+        _bundle_ts = PROJECT_ROOT / "bundles" / "lung_nodule_ct_detection" / "models" / "model.ts"
+        if not _bundle_ts.exists():
+            raise HTTPException(
+                status_code=503,
+                detail="MONAI bundle chưa được cài. Vui lòng cài bundle hoặc chọn mode khác.",
+            )
+    elif model == "gt":
+        _xml_dir = PROJECT_ROOT / "tcia-lidc-xml"
+        if not _xml_dir.exists() or not any(_xml_dir.iterdir()):
+            raise HTTPException(
+                status_code=503,
+                detail="Thiếu LIDC XML annotations. Vui lòng kiểm tra dataset hoặc chọn mode khác.",
+            )
+
     case_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     work = UPLOADS_DIR / case_id
     work.mkdir()
@@ -250,13 +381,28 @@ async def analyze(files: list[UploadFile] = File(...)):
             case_label = fname.split("/")[0] if "/" in fname else stem
         if stem.lower().endswith(".zip"):
             with zipfile.ZipFile(io.BytesIO(data)) as z:
-                z.extractall(work)
+                work_resolved = work.resolve()
+                for member in z.infolist():
+                    # Block zip-slip: resolved member path must be inside work
+                    member_target = (work / member.filename).resolve()
+                    try:
+                        if not member_target.is_relative_to(work_resolved):
+                            continue  # silently skip malicious entries
+                    except (ValueError, OSError):
+                        continue
+                    z.extract(member, work)
             continue
         target = work / fname
+        # Block path traversal: target must stay inside work dir
+        try:
+            if not target.resolve().is_relative_to(work.resolve()):
+                continue  # silently skip malicious paths
+        except (ValueError, OSError):
+            continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
 
-    dcm_paths = list(work.rglob("*.dcm")) + list(work.rglob("*.DCM"))
+    dcm_paths = sorted({p for p in work.rglob("*") if p.is_file() and p.suffix.lower() == ".dcm"})
     if not dcm_paths:
         dcm_paths = [
             p for p in work.rglob("*")
@@ -266,9 +412,9 @@ async def analyze(files: list[UploadFile] = File(...)):
         shutil.rmtree(work, ignore_errors=True)
         raise HTTPException(status_code=400, detail="Không tìm thấy file DICOM trong upload.")
 
-    _emit(case_id, 1, f"Upload xong ({len(dcm_paths)} file). Đang chờ AI...")
-    asyncio.create_task(asyncio.to_thread(_do_analyze, work, dcm_paths, case_id, case_label))
-    return JSONResponse({"case_id": case_id, "name": case_label, "n_dicoms": len(dcm_paths)})
+    _emit(case_id, 1, f"Upload xong ({len(dcm_paths)} file). Model={model}. Đang chờ AI...")
+    asyncio.create_task(asyncio.to_thread(_do_analyze, work, dcm_paths, case_id, case_label, model))
+    return JSONResponse({"case_id": case_id, "name": case_label, "n_dicoms": len(dcm_paths), "model": model})
 
 
 @app.get("/api/events/{case_id}")
@@ -321,6 +467,8 @@ async def case_verdict(case_id: str, payload: dict):
     reason = payload.get("reason", "")
     if nid is None:
         raise HTTPException(status_code=400, detail="nodule_id required")
+    if verdict is not None and verdict not in ALLOWED_VERDICTS:
+        raise HTTPException(status_code=400, detail="Verdict không hợp lệ. Phải là accept/reject/review hoặc null.")
     vp = cdir / "verdicts.json"
     data = json.loads(vp.read_text(encoding="utf-8")) if vp.exists() else {}
     if verdict is None:
@@ -340,6 +488,19 @@ def case_delete(case_id: str):
     if cdir.exists():
         shutil.rmtree(cdir, ignore_errors=True)
     return {"deleted": case_id}
+
+
+@app.get("/api/training-metrics")
+def training_metrics():
+    from training_metrics import parse_stage2_log, parse_fpr_log, get_summary
+    try:
+        return {
+            "stage2": parse_stage2_log(),
+            "fpr": parse_fpr_log(),
+            "summary": get_summary(),
+        }
+    except FileNotFoundError:
+        raise HTTPException(503, detail="Training log not found. Please verify server configuration.")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listCases } from "@/lib/api";
 import type { CaseListItem } from "@/lib/types";
+import { MODEL_META } from "@/lib/model-meta";
 
 export function HistoryList() {
   const [cases, setCases] = useState<CaseListItem[] | null>(null);
@@ -23,19 +24,27 @@ export function HistoryList() {
       </CardHeader>
       <CardContent>
         <ul className="divide-y">
-          {cases.map((c) => (
-            <li key={c.id} className="flex items-center justify-between py-3">
-              <Link
-                href={`/case/${c.id}`}
-                className="font-semibold text-foreground hover:text-primary hover:underline"
-              >
-                {c.name}
-              </Link>
-              <span className="text-xs text-muted-foreground">
-                {c.n_nodules} nodule · {c.n_slices} slice · {c.ts}
-              </span>
-            </li>
-          ))}
+          {cases.map((c) => {
+            const mm = MODEL_META[c.model ?? "mine"];
+            return (
+              <li key={c.id} className="flex items-center justify-between gap-3 py-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Link
+                    href={`/case/${c.id}`}
+                    className="font-semibold text-foreground hover:text-primary hover:underline truncate"
+                  >
+                    {c.name}
+                  </Link>
+                  <span className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-medium ${mm.badgeClass}`}>
+                    {mm.label}
+                  </span>
+                </div>
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {c.n_nodules} nodule · {c.n_slices} slice · {c.ts}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </CardContent>
     </Card>

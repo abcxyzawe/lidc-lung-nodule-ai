@@ -27,6 +27,20 @@ export function Topbar({ subtitle }: { subtitle?: string }) {
           </div>
         </Link>
 
+        <nav className="flex items-center gap-1">
+          <Link
+            href="/"
+            className="rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            Trang chủ
+          </Link>
+          <Link
+            href="/training"
+            className="rounded-md px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            Chỉ số huấn luyện
+          </Link>
+        </nav>
       </div>
     </header>
   );

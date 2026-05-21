@@ -9,6 +9,8 @@ import { toast } from "sonner";
 import { Folder, FileArchive, Zap, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { streamProgress, uploadAndAnalyze } from "@/lib/api";
+import { MODEL_META } from "@/lib/model-meta";
+import type { ModelKey } from "@/lib/types";
 
 export function UploadForm() {
   const router = useRouter();
@@ -16,6 +18,7 @@ export function UploadForm() {
   const zipRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<FileList | null>(null);
   const [fileLabel, setFileLabel] = useState("");
+  const [model, setModel] = useState<ModelKey>("mine");
   const [submitting, setSubmitting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressText, setProgressText] = useState("");
@@ -39,7 +42,7 @@ export function UploadForm() {
     setProgressText("Đang upload…");
 
     try {
-      const r = await uploadAndAnalyze(files, (loaded, total) => {
+      const r = await uploadAndAnalyze(files, model, (loaded, total) => {
         const upPct = (loaded / total) * 100;
         setProgress(Math.round(upPct * 0.3));
         setProgressText(`Upload ${(loaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB`);
@@ -121,6 +124,33 @@ export function UploadForm() {
               <p className="mt-3 flex items-center gap-2 text-sm font-medium text-emerald-700">
                 <CheckCircle2 className="h-4 w-4" />
                 {fileLabel}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-medium">Chọn mô hình AI</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(Object.entries(MODEL_META) as [ModelKey, typeof MODEL_META[ModelKey]][]).map(([id, meta]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setModel(id)}
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition",
+                    model === id
+                      ? "border-primary bg-primary/5"
+                      : "hover:border-primary/40 hover:bg-muted/40"
+                  )}
+                >
+                  <div className="text-sm font-semibold">{meta.label}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{meta.sub}</div>
+                </button>
+              ))}
+            </div>
+            {model === "gt" && (
+              <p className="mt-2 text-xs text-amber-600">
+                ⚠️ Ground truth chỉ có sẵn cho 1010 bệnh nhân trong LIDC-IDRI dataset.
               </p>
             )}
           </div>
