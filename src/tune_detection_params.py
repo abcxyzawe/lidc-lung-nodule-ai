@@ -159,9 +159,11 @@ def filter_and_match(blobs: list, lung_dist_mm: np.ndarray, voxel_sp: tuple,
                      gt_nodules: list, *,
                      min_voxels: int, max_elong: float, merge_dist_mm: float,
                      subpleural_min_mm: float,
-                     match_min_radius_mm: float = 5.0):
+                     match_min_radius_mm: float = 3.0):
     """Apply post-proc filters to precomputed blobs, then match to GT.
 
+    match_min_radius_mm: floor for LUNA16 radius rule = max(diam/2, floor).
+      LUNA16 official uses 3.0 mm. Do not change without updating docs.
     lung_dist_mm: precomputed distance transform of lung (mm), 3D array.
     """
     sp = np.array(voxel_sp, dtype=np.float32)

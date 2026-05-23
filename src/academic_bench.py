@@ -10,14 +10,17 @@ Produces FROC + CPM + ablation + failure analysis:
   3. Ablation: full vs -TTA vs -lung-mask vs -post-process
   4. Failure analysis: top 3 FN + top 3 FP with PNG export
 
-NOTE — matching rule:
-  We match a predicted nodule to a GT nodule using a *fixed* centroid distance
-  threshold (MATCH_TOL_MM = 15 mm). This is inspired by common nodule-detection
-  evaluation practice but is NOT the LUNA16 official matching rule, which uses
-  a per-nodule radius criterion (a candidate matches GT when centroid distance
-  <= GT_diameter / 2). Our fixed 15 mm is more lenient than LUNA16 for small
-  nodules. CPM numbers from this script are therefore not directly comparable
-  to the LUNA16 leaderboard.
+NOTE — matching rules:
+  Two rules are supported via --match-rule:
+
+  "luna16_radius" (default): centroid distance <= max(GT_diameter / 2, 3.0 mm).
+    This matches the LUNA16 official evaluation criterion. The 3 mm floor
+    provides tolerance for very small annotations where radius < 3 mm.
+    CPM from this rule IS comparable to LUNA16 leaderboard methodology.
+
+  "fixed_15mm": centroid distance <= 15 mm (fixed, size-independent).
+    More lenient than LUNA16 for small nodules. Used in earlier project
+    iterations (baseline F1=0.618 on test_panel). Kept for backward compat.
 
 All outputs to work/academic/. Run: python academic_bench.py
 """
@@ -50,7 +53,7 @@ FAILURE_DIR = ACADEMIC_DIR / "failure_cases"
 LUNA16_FP_RATES = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]  # LUNA16-standard set
 THRESHOLD_SWEEP = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
 MATCH_TOL_MM = 15.0  # fallback for fixed-distance matching
-MIN_RADIUS_MM = 5.0  # minimum effective radius for LUNA16-style matching (very small nodules need some tolerance)
+MIN_RADIUS_MM = 3.0  # LUNA16 official floor: max(diameter/2, 3mm) — do NOT change without updating docs
 
 
 def infer_and_cache(pid, vol, voxel_sp, tta):
@@ -95,10 +98,13 @@ def match_predictions_to_gt(pred_nodules, gt_nodules, voxel_sp,
     """Match predicted nodules to GT nodules.
 
     rule:
-      - "luna16_radius": A prediction matches a GT if centroid distance
-        <= max(GT_diameter/2, min_radius_mm). This is the official LUNA16
-        rule. min_radius_mm provides tolerance for very small annotations.
-      - "fixed_15mm": Fixed centroid distance <= tol_mm regardless of size.
+      - "luna16_radius" (default): A prediction matches a GT if centroid
+        distance <= max(GT_diameter / 2, 3.0 mm). This is the official
+        LUNA16 evaluation criterion. The 3 mm floor handles very small
+        annotations whose radius is < 3 mm.
+      - "fixed_15mm": Fixed centroid distance <= tol_mm (default 15 mm)
+        regardless of nodule size. More lenient for small nodules; kept
+        for backward compatibility with pre-LUNA16-rule baselines.
     """
     if not gt_nodules or not pred_nodules:
         return [], list(range(len(gt_nodules))), list(range(len(pred_nodules)))
@@ -382,7 +388,7 @@ def main():
         print(f"  FP: {fp['pid']} {fp['diam_mm']:.1f}mm conf={fp['confidence']*100:.0f}%")
 
     match_rule_desc = (
-        "LUNA16 official: centroid <= max(GT_diameter/2, 5mm)" if args.match_rule == "luna16_radius"
+        "LUNA16 official: centroid <= max(GT_diameter/2, 3mm)" if args.match_rule == "luna16_radius"
         else "fixed centroid distance <= 15 mm"
     )
     summary = {
